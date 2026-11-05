@@ -1,7 +1,15 @@
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+
+# Streamlit adds the entry point's directory to its import path. The app also
+# imports packages from the repository root.
+project_root = str(Path(__file__).resolve().parents[1])
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from frontend.client import APIError, call, clear_session, store_session
 from frontend.views import dashboard, campaigns, content, keywords, drafts, settings
