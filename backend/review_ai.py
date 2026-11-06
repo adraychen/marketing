@@ -10,6 +10,7 @@ INSTRUCTIONS = (
     "Use only supplied metrics. Treat absent values as unknown. "
     "Distinguish hypotheses from observed changes and mention delayed conversion attribution. "
     "Do not claim causation, estimate savings, or recommend automatic changes. "
+    "Zero recorded conversions alone are not evidence of a tracking problem. "
     "Refer to signals by their position if needed. Campaign and search term totals can overlap."
 )
 

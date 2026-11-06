@@ -13,7 +13,7 @@ from backend.connectors.google_ads import GoogleAdsError
 from backend.jobs import SyncBusy, configured_org, connector, run_sync
 from backend.metrics import previous_period
 from backend.models import DraftInput
-from backend.review import weekly_review
+from backend.review import MIN_CLICKS, weekly_review
 from backend.review_ai import ReviewAIError, enabled as review_ai_enabled, explain
 from backend.validation import validate
 
@@ -124,6 +124,8 @@ def weekly_review_ai(org: str, account_id: str, end: date,
     review = weekly_review(snapshot, account, start, end)
     if not review["has_activity"]:
         raise HTTPException(409, "The review needs two imported weeks and campaign activity.")
+    if not review["ai_ready"]:
+        raise HTTPException(409, f"The AI summary needs at least {MIN_CLICKS} clicks in each week.")
     try:
         return {"summary": explain(review, account["currency"])}
     except ReviewAIError as exc:

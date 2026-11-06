@@ -77,6 +77,8 @@ Open **Weekly Review** after selecting an ad account. It defaults to the latest 
 
 The evidence and ranked checks run without an AI key. To enable the optional AI summary in live mode, create a key in the Groq Console and set `GROQ_API_KEY` in the FastAPI host environment. The default model is `openai/gpt-oss-20b`. Set `GROQ_REVIEW_MODEL` to override it with another model that supports chat completions. Organization admins can click **Generate AI summary**. Each click sends aggregate metrics and anonymized signals to Groq, subject to the account's rate limits and billing plan. Campaign names, account identifiers, ad content, and search-query text stay in the dashboard.
 
+The AI summary requires at least 20 campaign clicks in each of the two weeks. Low-traffic reviews still show the reported metrics and breakdowns. The threshold is a minimum for AI interpretation, rather than a statistical significance test.
+
 [Groq API keys](https://console.groq.com/keys) · [Groq rate limits](https://console.groq.com/docs/rate-limits)
 
 ## Tests

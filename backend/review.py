@@ -20,7 +20,7 @@ def weekly_review(report, account, start, end):
         "coverage": bool(account.get("synced_from") and account.get("synced_through")
                          and iso_date(account["synced_from"]) <= first
                          and last <= iso_date(account["synced_through"])),
-        "has_activity": False, "drivers": {}, "actions": [],
+        "has_activity": False, "ai_ready": False, "drivers": {}, "actions": [],
     }
     if not result["coverage"]:
         return result
@@ -37,7 +37,7 @@ def weekly_review(report, account, start, end):
     previous = summarize((row for period in campaign_rows for row in period[1]), currency)
     result.update(current=current, previous=previous, has_activity=any(
         current[key] or previous[key] for key in ("spend", "impressions", "clicks", "conversions")
-    ))
+    ), ai_ready=min(current["clicks"], previous["clicks"]) >= MIN_CLICKS)
     if not result["has_activity"]:
         return result
 

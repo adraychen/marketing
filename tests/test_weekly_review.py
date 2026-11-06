@@ -2,8 +2,10 @@ import json
 from datetime import date
 
 import httpx
+import pytest
+from fastapi import HTTPException
 
-from backend import review_ai
+from backend import main, review_ai
 from backend.review import weekly_review
 
 START, END = date(2026, 10, 30), date(2026, 11, 5)
@@ -33,6 +35,7 @@ def test_review_compares_same_length_windows_and_ranks_signals():
     assert review["current"]["spend"] == 130
     assert review["previous"]["roas"] == 2.5
     assert review["current"]["roas"] is None
+    assert review["ai_ready"]
     assert [action["kind"] for action in review["actions"]] == ["search_term", "campaign"]
     assert review["actions"][0]["ad_group"] == "Search ad group"
     assert review["drivers"]["campaigns"][0]["value_delta"] is None
@@ -69,3 +72,17 @@ def test_ai_summary_sends_only_anonymized_evidence(monkeypatch):
 
     monkeypatch.setattr(review_ai.httpx, "post", post)
     assert review_ai.explain(weekly_review(snapshot(), ACCOUNT, START, END), "CAD") == "Review the change."
+
+
+@pytest.mark.parametrize("period_index", [0, 1])
+def test_ai_endpoint_does_not_send_low_traffic_weeks_to_groq(monkeypatch, period_index):
+    report = snapshot()
+    report["performance"][period_index]["clicks"] = 3
+    monkeypatch.setattr(main, "MODE", "live")
+    monkeypatch.setattr(main, "review_ai_enabled", lambda: True)
+    monkeypatch.setattr(main.repo, "snapshot", lambda *_args: report)
+    monkeypatch.setattr(main, "explain", lambda *_args: pytest.fail("Groq should not be called"))
+
+    with pytest.raises(HTTPException, match="20 clicks in each week") as exc:
+        main.weekly_review_ai("org", "account", END, {**ACCOUNT, "timezone": "America/Toronto"}, {"role": "admin"})
+    assert exc.value.status_code == 409
