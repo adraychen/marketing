@@ -5,8 +5,23 @@ import time
 from pathlib import Path
 
 import httpx
+import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
+
+from frontend import views
+
+
+def test_draft_editor_ignores_blank_rows_but_keeps_pinned_rows(monkeypatch):
+    descriptions = [{"text": f"Description {i}", "pin": ""} for i in range(1, 5)]
+    pinned_without_text = {"text": "", "pin": "DESCRIPTION_1"}
+    rows = descriptions + [{"text": "  ", "pin": None}, pinned_without_text]
+    monkeypatch.setattr(views.st, "markdown", lambda *_args: None)
+    monkeypatch.setattr(views.st, "data_editor", lambda *_args, **_kwargs: pd.DataFrame(rows))
+
+    assert views.edit_assets("descriptions", {"descriptions": descriptions}, "test") == (
+        descriptions + [pinned_without_text]
+    )
 
 
 @pytest.mark.skipif(os.getenv("TEST_LOCAL_UI") != "1", reason="requires local TCP access")

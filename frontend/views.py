@@ -287,11 +287,13 @@ def edit_assets(kind, creative, token):
     pins = [""] + [f"{prefix}_{position}" for position in range(1, count + 1)]
     original = creative[kind]
     pins += sorted({asset["pin"] for asset in original} - set(pins))
-    return st.data_editor(pd.DataFrame(original, columns=["text", "pin"]), hide_index=True,
-                          num_rows="dynamic", width="stretch", key=f"{token}:{kind}", column_config={
-                              "text": st.column_config.TextColumn("Asset", required=True, width="large"),
-                              "pin": st.column_config.SelectboxColumn("Pin to", options=pins),
-                          }).fillna("").to_dict("records")
+    edited = st.data_editor(pd.DataFrame(original, columns=["text", "pin"]), hide_index=True,
+                            num_rows="dynamic", width="stretch", key=f"{token}:{kind}", column_config={
+                                "text": st.column_config.TextColumn("Asset", required=True, width="large"),
+                                "pin": st.column_config.SelectboxColumn("Pin to", options=pins),
+                            })
+    assets = edited.fillna("").to_dict("records")
+    return [asset for asset in assets if asset["text"].strip() or asset["pin"]]
 
 
 def comparison(original, revised):
