@@ -85,6 +85,20 @@ def test_google_revoked_permissions(status):
     assert "secret" not in str(failure.value)
 
 
+@pytest.mark.parametrize(("detail", "code"), [
+    ({"errors": [{"errorCode": {"authorizationError": "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION"},
+                  "message": "private upstream details"}]}, "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION"),
+    ({"reason": "SERVICE_DISABLED", "metadata": {"consumer": "private upstream details"}}, "SERVICE_DISABLED"),
+])
+def test_google_access_denial_exposes_only_safe_diagnostics(detail, code):
+    response = httpx.Response(403, json={"error": {"details": [detail]}}, headers={"request-id": "abc-123"})
+    with httpx.Client(transport=httpx.MockTransport(lambda _: response)) as client:
+        with pytest.raises(GoogleAdsError, match=code) as failure:
+            GoogleAdsConnector(client, GoogleCredentials()).discover()
+    assert "abc-123" in str(failure.value)
+    assert "private upstream details" not in str(failure.value)
+
+
 def test_rate_limit_retried(monkeypatch):
     from backend.connectors import google_ads
     calls = []

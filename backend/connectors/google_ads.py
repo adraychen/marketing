@@ -43,6 +43,33 @@ class GoogleAdsError(Exception):
     pass
 
 
+ACCESS_HINTS = {
+    "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION": "Request Explorer access in the Google Ads API overview for the service account's Cloud project.",
+    "MISSING_TOS": "Accept the Google Ads API terms in the service account's Cloud project.",
+    "PROJECT_DISABLED": "Check that the Google Ads API is enabled in the service account's Cloud project.",
+    "SERVICE_DISABLED": "Enable the Google Ads API in the service account's Cloud project.",
+    "USER_PERMISSION_DENIED": "Verify that the service account email has Read-only access to the Google Ads account or its manager.",
+    "INVALID_LOGIN_CUSTOMER_ID_SERVING_CUSTOMER_ID_COMBINATION": "Verify the configured Google Ads manager ID and its link to the advertising account.",
+    "CUSTOMER_NOT_ENABLED": "Check that the Google Ads account is enabled and its setup is complete.",
+}
+
+
+def access_hint(response):
+    try:
+        details = response.json()["error"]["details"]
+        for detail in details:
+            reason = detail.get("reason")
+            if isinstance(reason, str) and reason in ACCESS_HINTS:
+                return f"{reason}. {ACCESS_HINTS[reason]}"
+            for error in detail.get("errors", []):
+                code = error.get("errorCode", {}).get("authorizationError")
+                if isinstance(code, str) and code in ACCESS_HINTS:
+                    return f"{code}. {ACCESS_HINTS[code]}"
+    except (ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return "Check Cloud API access and account permissions."
+
+
 def normalize_ad(row):
     link = row["adGroupAd"]
     ad = link["ad"]
@@ -120,13 +147,13 @@ class GoogleAdsConnector(AdvertisingConnector):
             time.sleep(2 ** attempt)
         if response is None:
             raise GoogleAdsError("Google Ads could not be reached.")
+        request_id = response.headers.get("request-id", "")
+        suffix = f" Request ID {request_id}." if re.fullmatch(r"[\w-]{1,100}", request_id) else ""
         if response.status_code in {401, 403}:
-            raise GoogleAdsError("Google Ads access was denied. Check Cloud API access and account permissions.")
+            raise GoogleAdsError(f"Google Ads access was denied. {access_hint(response)}{suffix}")
         if response.status_code == 429:
             raise GoogleAdsError("Google Ads quota or rate limit reached. Try again later.")
         if not response.is_success:
-            request_id = response.headers.get("request-id", "")
-            suffix = f" Request ID {request_id}." if re.fullmatch(r"[\w-]{1,100}", request_id) else ""
             raise GoogleAdsError(f"Google Ads reporting request failed (HTTP {response.status_code}).{suffix}")
         return response.json()
 
