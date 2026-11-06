@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 
 from backend import main, review_ai
 from backend.review import weekly_review
+from frontend import weekly_review as review_view
 
 START, END = date(2026, 10, 30), date(2026, 11, 5)
 ACCOUNT = {"currency": "CAD", "synced_from": "2026-10-23", "synced_through": "2026-11-05"}
@@ -86,3 +88,23 @@ def test_ai_endpoint_does_not_send_low_traffic_weeks_to_groq(monkeypatch, period
     with pytest.raises(HTTPException, match="20 clicks in each week") as exc:
         main.weekly_review_ai("org", "account", END, {**ACCOUNT, "timezone": "America/Toronto"}, {"role": "admin"})
     assert exc.value.status_code == 409
+
+
+def test_weekly_view_handles_review_without_ai_ready(monkeypatch):
+    report = snapshot()
+    report["performance"][1]["clicks"] = 3
+    older_review = weekly_review(report, ACCOUNT, START, END)
+    del older_review["ai_ready"]
+    ui = MagicMock()
+    ui.date_input.return_value = END
+    ui.radio.return_value = "Campaigns"
+    ui.selectbox.return_value = "Spend"
+    monkeypatch.setattr(review_view, "st", ui)
+    monkeypatch.setattr(review_view, "call", lambda *_args, **_kwargs: report)
+    monkeypatch.setattr(review_view, "weekly_review", lambda *_args: older_review)
+    monkeypatch.setattr(review_view, "table", lambda _rows: None)
+
+    review_view.show_weekly_review(ACCOUNT, "/test", END, ai_available=True)
+
+    assert "3 clicks this week" in ui.info.call_args.args[0]
+    ui.button.assert_not_called()

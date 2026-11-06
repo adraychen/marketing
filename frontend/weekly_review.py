@@ -46,9 +46,10 @@ def show_weekly_review(account, route, latest_end, ai_available):
         delta = signed(now - before, kind, currency) if now is not None and before is not None else None
         column.metric(label, number(now, kind, currency), delta, delta_color="off", border=True)
     st.caption("Recent conversions can arrive later. Conversion value and ROAS use Google Ads attribution.")
-    if not review["ai_ready"]:
-        current_clicks = review["current"]["clicks"]
-        prior_clicks = review["previous"]["clicks"]
+    current_clicks = review["current"]["clicks"]
+    prior_clicks = review["previous"]["clicks"]
+    ai_ready = review.get("ai_ready", min(current_clicks, prior_clicks) >= MIN_CLICKS)
+    if not ai_ready:
         st.info(f"Low traffic · {current_clicks:,} clicks this week and {prior_clicks:,} last week. "
                 f"The AI summary needs at least {MIN_CLICKS} clicks in each week. "
                 "Use the figures below to see what was reported.")
@@ -112,7 +113,7 @@ def show_weekly_review(account, route, latest_end, ai_available):
     if level == "search_terms":
         st.caption("Google reports only some search terms. Their totals may differ from campaign totals.")
 
-    if ai_available and review["ai_ready"]:
+    if ai_available and ai_ready:
         st.subheader("AI summary")
         st.caption("Generate an interpretation using aggregate metrics and anonymized signals sent to Groq.")
         key = f"review-ai:{route}:{end}"
