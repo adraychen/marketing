@@ -27,14 +27,15 @@ Open [the local dashboard](http://127.0.0.1:8501). Select either synthetic ad ac
 ## Configure Supabase
 
 1. Create a Supabase project. Apply [the versioned migration](supabase/migrations/20261105000100_stage_one.sql) as the database owner through the SQL Editor or your Supabase CLI workflow.
+   If the original unprefixed Stage 1 schema is already installed, run [the upgrade SQL](supabase/upgrade_existing_stage_one.sql) instead. It renames the existing tables in place and preserves data and memberships. Deploy the updated backend after running the upgrade.
 2. Create an email/password user under **Authentication → Users**. Copy their User UID. Run the following in the SQL Editor, replacing the two placeholders with the organization's name and the user's UUID. Copy the organization ID returned by the query.
 
    ```sql
    with created as (
-       insert into public.organizations (name)
+       insert into public.marketing_organizations (name)
        values ('Your organization name') returning id
    )
-   insert into public.memberships (organization_id, user_id, role)
+   insert into public.marketing_memberships (organization_id, user_id, role)
    select id, 'YOUR-SUPABASE-USER-UUID'::uuid, 'admin' from created
    returning organization_id;
    ```

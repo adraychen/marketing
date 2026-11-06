@@ -44,16 +44,16 @@ def run_sync(org, account_row):
         lock.execute("select pg_try_advisory_xact_lock(hashtextextended(%s, 0)) as acquired", (account_id,))
         if not lock.fetchone()["acquired"]:
             raise SyncBusy
-        lock.execute("""select data,synced_through from ad_accounts
+        lock.execute("""select data,synced_through from marketing_ad_accounts
                      where organization_id=%s and id=%s for no key update""",
                      (org, account_id))
         current = lock.fetchone()
         account = Account.model_validate(current["data"])
         with repo.database() as audit:
-            audit.execute("""update sync_runs set status='failed', finished_at=now(),
+            audit.execute("""update marketing_sync_runs set status='failed', finished_at=now(),
                 error='Previous worker exited before finishing.' where organization_id=%s and account_id=%s
                 and status='running'""", (org, account_id))
-            audit.execute("""insert into sync_runs (organization_id,account_id,status)
+            audit.execute("""insert into marketing_sync_runs (organization_id,account_id,status)
                 values (%s,%s,'running') returning id""", (org, account_id))
             run_id = audit.fetchone()["id"]
         try:
@@ -70,14 +70,14 @@ def run_sync(org, account_row):
             batch = ImportBatch(campaigns=campaigns, **content, performance=performance, search_terms=terms)
             repo.write_import(lock, org, account_id, batch, start, end, account.currency)
             counts = {key: len(getattr(batch, key)) for key in type(batch).model_fields}
-            lock.execute("""update sync_runs set status='succeeded', counts=%s, finished_at=now()
+            lock.execute("""update marketing_sync_runs set status='succeeded', counts=%s, finished_at=now()
                 where id=%s""", (Json(counts), run_id))
         except Exception as exc:
             reason = str(exc) if isinstance(exc, GoogleAdsError) else (
                 "Import failed before any changes were committed. Check report compatibility and database setup."
             )
             with repo.database() as audit:
-                audit.execute("""update sync_runs set status='failed', error=%s, finished_at=now()
+                audit.execute("""update marketing_sync_runs set status='failed', error=%s, finished_at=now()
                     where id=%s""", (reason, run_id))
             raise GoogleAdsError(reason) from None
     return counts

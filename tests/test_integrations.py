@@ -25,9 +25,9 @@ def test_postgres_upserts_and_rls(monkeypatch):
                 yield cur
 
             monkeypatch.setattr(repo, "database", test_database)
-            cur.execute("insert into organizations (id,name) values (%s,'Test A'),(%s,'Test B')", (org, other))
+            cur.execute("insert into marketing_organizations (id,name) values (%s,'Test A'),(%s,'Test B')", (org, other))
             cur.execute("insert into auth.users (id) values (%s)", (user,))
-            cur.execute("insert into memberships (organization_id,user_id) values (%s,%s)", (org, user))
+            cur.execute("insert into marketing_memberships (organization_id,user_id) values (%s,%s)", (org, user))
             account = Account(resource="fixture-account", name="Fixture", currency="CAD", timezone="America/Toronto")
             aid = repo.connect_account(org, account)
             assert repo.connect_account(org, account) == aid
@@ -43,25 +43,25 @@ def test_postgres_upserts_and_rls(monkeypatch):
             batch = ImportBatch(campaigns=[campaign], ad_groups=[group], ads=[ad], performance=[daily])
             repo.write_import(cur, org, aid, batch, day, day, "CAD")
             cur.execute("drop table import_daily")
-            cur.execute("select id from ad_assets where organization_id=%s", (org,))
+            cur.execute("select id from marketing_ad_assets where organization_id=%s", (org,))
             original_asset_id = cur.fetchone()["id"]
             edited = {"headlines": [{"text": "Revised", "pin": "HEADLINE_1"}], "descriptions": []}
             assert repo.save_draft(org, aid, ad.resource, user, edited, None) == 1
 
             daily.spend = 12
             repo.write_import(cur, org, aid, batch, day, day, "CAD")
-            cur.execute("select id, data from ad_assets where organization_id=%s", (org,))
+            cur.execute("select id, data from marketing_ad_assets where organization_id=%s", (org,))
             assert cur.fetchall() == [{"id": original_asset_id, "data": creative["headlines"][0]}]
-            cur.execute("select spend from performance_daily where organization_id=%s", (org,))
+            cur.execute("select spend from marketing_performance_daily where organization_id=%s", (org,))
             assert [row["spend"] for row in cur.fetchall()] == [12]
             assert repo.drafts(org, aid)[0]["creative"] == edited
             assert repo.drafts(other, aid) == []
 
             cur.execute("set local role authenticated")
             cur.execute("select set_config('request.jwt.claim.sub', %s, true)", (user,))
-            cur.execute("select id::text from organizations where id in (%s,%s)", (org, other))
+            cur.execute("select id::text from marketing_organizations where id in (%s,%s)", (org, other))
             assert cur.fetchall() == [{"id": org}]
-            cur.execute("select count(*) from ad_accounts where organization_id in (%s,%s)", (org, other))
+            cur.execute("select count(*) from marketing_ad_accounts where organization_id in (%s,%s)", (org, other))
             assert cur.fetchone()["count"] == 1
     finally:
         conn.rollback()
