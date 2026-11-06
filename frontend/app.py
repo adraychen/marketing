@@ -41,7 +41,7 @@ def sign_in():
 
 
 def app():
-    mode = call("/health")["mode"]
+    mode = call("/health", timeout=75)["mode"]
     if mode == "live" and not st.session_state.get("token"):
         sign_in()
         return

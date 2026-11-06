@@ -1,29 +1,52 @@
 import os
 import time
+from urllib.parse import urlsplit
 
 import httpx
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.errors import StreamlitSecretNotFoundError
 
 load_dotenv()
-BASE = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
 class APIError(Exception):
     pass
 
 
+def backend_url():
+    try:
+        configured = st.secrets["BACKEND_URL"]
+    except (KeyError, StreamlitSecretNotFoundError):
+        configured = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+    if isinstance(configured, str):
+        base = configured.strip().rstrip("/")
+        try:
+            url = urlsplit(base)
+            if (url.scheme in {"http", "https"} and url.hostname and not url.username
+                    and not url.password and not url.query and not url.fragment and url.path != "/health"):
+                return base
+        except ValueError:
+            pass
+    raise APIError("Set BACKEND_URL to the FastAPI base URL without /health.")
+
+
 def call(path, method="GET", params=None, payload=None, timeout=15):
+    base = backend_url()
     if not path.startswith("/auth/"):
         refresh()
     headers = {}
     if st.session_state.get("token"):
         headers["Authorization"] = "Bearer " + st.session_state.token
     try:
-        result = httpx.request(method, BASE + path, params=params, json=payload, headers=headers,
+        result = httpx.request(method, base + path, params=params, json=payload, headers=headers,
                                timeout=timeout, trust_env=False)
+    except httpx.TimeoutException:
+        raise APIError(f"The dashboard API at {urlsplit(base).netloc} timed out. Open its /health page and retry.") from None
     except httpx.RequestError:
-        raise APIError("The dashboard API could not be reached.") from None
+        raise APIError(
+            f"The dashboard API at {urlsplit(base).netloc} could not be reached. Check BACKEND_URL and the API's /health page."
+        ) from None
     if result.status_code >= 500 and result.status_code != 502 and result.status_code != 503:
         raise APIError("The dashboard API encountered an error. Check backend configuration.")
     if not result.is_success:
