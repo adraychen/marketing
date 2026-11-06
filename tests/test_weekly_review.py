@@ -51,19 +51,20 @@ def test_review_withholds_recommendations_without_coverage_or_enough_clicks():
 
 
 def test_ai_summary_sends_only_anonymized_evidence(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test")
-    monkeypatch.setenv("OPENAI_REVIEW_MODEL", "test-model")
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.delenv("GROQ_REVIEW_MODEL", raising=False)
 
     def post(url, **kwargs):
-        assert url == "https://api.openai.com/v1/responses"
+        assert url == "https://api.groq.com/openai/v1/chat/completions"
+        assert kwargs["headers"]["Authorization"] == "Bearer test"
         payload = kwargs["json"]
-        assert payload["store"] is False
-        assert "Private" not in payload["input"]
-        evidence = json.loads(payload["input"])
+        assert payload["model"] == "openai/gpt-oss-20b"
+        content = payload["messages"][1]["content"]
+        assert "Private" not in content
+        evidence = json.loads(content)
         assert evidence["signals"][0]["current"]["spend"] == 55
         return httpx.Response(200, request=httpx.Request("POST", url), json={
-            "status": "completed",
-            "output": [{"type": "message", "content": [{"type": "output_text", "text": "Review the change."}]}],
+            "choices": [{"finish_reason": "stop", "message": {"content": "Review the change."}}],
         })
 
     monkeypatch.setattr(review_ai.httpx, "post", post)

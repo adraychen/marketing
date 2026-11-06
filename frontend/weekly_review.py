@@ -108,7 +108,7 @@ def show_weekly_review(account, route, latest_end, ai_available):
 
     if ai_available:
         st.subheader("AI summary")
-        st.caption("Generate an interpretation using aggregate metrics and anonymized signals sent to OpenAI.")
+        st.caption("Generate an interpretation using aggregate metrics and anonymized signals sent to Groq.")
         key = f"review-ai:{route}:{end}"
         if st.button("Generate AI summary"):
             try:

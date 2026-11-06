@@ -75,9 +75,9 @@ A first import defaults to 180 days and subsequent runs refresh 30 recent days, 
 
 Open **Weekly Review** after selecting an ad account. It defaults to the latest seven completed account days and compares them with the preceding seven days. Campaign, keyword, and search-term breakdowns rank changes in spend, conversions, or conversion value. The review shows current imported settings as context. It holds recommendations until both periods are covered, uses minimum activity thresholds, and flags delayed conversions. Keyword and search-term tables include ad group names when available. Search-term coverage is limited by Google's reporting.
 
-The evidence and ranked checks run without an AI key. To enable the optional, on-demand AI summary in live mode, set `OPENAI_API_KEY` and `OPENAI_REVIEW_MODEL` to an API key and a Responses API model available to your project in the FastAPI host environment. Organization admins can then click **Generate AI summary**. Each click sends aggregate metrics and anonymized signals to OpenAI and can incur API usage charges. Campaign names, account identifiers, ad content, and search-query text stay in the dashboard. Use the evidence beside the summary to review any suggested action in Google Ads.
+The evidence and ranked checks run without an AI key. To enable the optional AI summary in live mode, create a key in the Groq Console and set `GROQ_API_KEY` in the FastAPI host environment. The default model is `openai/gpt-oss-20b`. Set `GROQ_REVIEW_MODEL` to override it with another model that supports chat completions. Organization admins can click **Generate AI summary**. Each click sends aggregate metrics and anonymized signals to Groq, subject to the account's rate limits and billing plan. Campaign names, account identifiers, ad content, and search-query text stay in the dashboard.
 
-[OpenAI Responses API documentation](https://developers.openai.com/api/docs/guides/migrate-to-responses)
+[Groq API keys](https://console.groq.com/keys) · [Groq rate limits](https://console.groq.com/docs/rate-limits)
 
 ## Tests
 
