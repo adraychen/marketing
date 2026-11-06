@@ -12,6 +12,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from frontend.client import APIError, call, clear_session, store_session
+from frontend.weekly_review import show_weekly_review
 from frontend.views import dashboard, campaigns, content, keywords, drafts, settings
 
 st.set_page_config(page_title="Okoo Marketing", page_icon="📈", layout="wide")
@@ -24,7 +25,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 PAGES = {
-    "Dashboard": dashboard, "Campaigns": campaigns, "Ad Content": content,
+    "Dashboard": dashboard, "Weekly Review": show_weekly_review, "Campaigns": campaigns, "Ad Content": content,
     "Keywords": keywords, "Drafts": drafts, "Settings": settings,
 }
 
@@ -41,14 +42,15 @@ def sign_in():
 
 
 def app():
-    mode = call("/health", timeout=75)["mode"]
+    health = call("/health", timeout=75)
+    mode = health["mode"]
     if mode == "live" and not st.session_state.get("token"):
         sign_in()
         return
 
     orgs = call("/orgs")
     st.sidebar.title("Okoo Marketing")
-    st.sidebar.caption("STAGE 1 · GOOGLE ADS")
+    st.sidebar.caption("GOOGLE ADS")
     if mode == "live" and st.sidebar.button("Sign out"):
         clear_session()
         st.rerun()
@@ -83,6 +85,12 @@ def app():
 
     today = datetime.now(ZoneInfo(account["timezone"])).date()
     end = today - timedelta(days=1)
+    route = f"{base}/accounts/{account_id}"
+    st.caption(f"{account['name']}  ·  {account['currency']}  ·  {account['timezone']}")
+    if nav == "Weekly Review":
+        show_weekly_review(account, route, end, health.get("review_ai") and org["role"] == "admin")
+        return
+
     selected = st.sidebar.radio("Date range", ["7 days", "30 days", "90 days", "Custom"], index=1,
                                 key=f"range:{account_id}")
     if selected == "Custom":
@@ -94,8 +102,6 @@ def app():
         start, end = dates
     else:
         start = end - timedelta(days=int(selected.split()[0]) - 1)
-    route = f"{base}/accounts/{account_id}"
-    st.caption(f"{account['name']}  ·  {account['currency']}  ·  {account['timezone']}")
     report = call(f"{route}/report", params={"start": start.isoformat(), "end": end.isoformat()})
     PAGES[nav](report, account, route, start, end)
 

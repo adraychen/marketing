@@ -62,6 +62,7 @@ def test_demo_launch_and_all_pages(tmp_path, monkeypatch):
         assert not app.exception and not app.error
         assert len(app.metric) == 10
         for page, title in (
+            ("Weekly Review", "Weekly performance review"),
             ("Campaigns", "Campaigns"), ("Ad Content", "Ad Content"),
             ("Keywords", "Keywords & search terms"), ("Drafts", "Draft revisions"), ("Settings", "Settings"),
         ):
