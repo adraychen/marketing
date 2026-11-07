@@ -81,6 +81,33 @@ The AI summary requires at least 20 campaign clicks in each of the two weeks. Lo
 
 [Groq API keys](https://console.groq.com/keys) · [Groq rate limits](https://console.groq.com/docs/rate-limits)
 
+## Content Marketing pilot
+
+Apply [the additive migration](supabase/migrations/20261106000100_content_marketing.sql) to the Supabase project that already has the prefixed Stage 1 schema. Apply it before deploying the new backend. The migration creates organization-scoped `marketing_content_*` tables and does not alter the Google Ads tables.
+
+Create a separate Render Cron Job from this repository. Use `pip install -r requirements.txt` to build and `python -m backend.content_jobs` to run. A daily schedule such as `0 20 * * *` runs at 20:00 UTC, after typical prior-day GA4 processing for Toronto. Keep the existing Google Ads cron job on its current command.
+
+| Job setting | Value |
+| --- | --- |
+| `DASHBOARD_MODE`, `DATABASE_URL` | `live` and the existing Supabase database URI |
+| `CONTENT_ORGANIZATION_ID` | The organization UUID already used for Okoo Marketing |
+| `CONTENT_SHOPIFY_SHOP` | The store's canonical `.myshopify.com` hostname |
+| `CONTENT_STOREFRONT_URL`, `CONTENT_SHOPIFY_BLOG` | Defaults to `https://okoostore.com` and `journal`. Use the verified storefront origin. |
+| Shopify authorization | An existing offline Admin token in `CONTENT_SHOPIFY_ACCESS_TOKEN`, or `CONTENT_SHOPIFY_CLIENT_ID` and `CONTENT_SHOPIFY_CLIENT_SECRET` for an eligible installed app owned by the same Shopify organization. Requires content read access. The job acquires a short-lived token for the latter configuration. |
+| `CONTENT_GA4_PROPERTY_ID`, `CONTENT_GA4_TIMEZONE` | Numeric GA4 property ID and its reporting timezone, defaulting to `America/Toronto` |
+| `CONTENT_GSC_SITE` | Exact Search Console property identifier, such as `sc-domain:okoostore.com` if that property is verified |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to an existing Google credential file on the cron service with read access to the configured GA4 and Search Console properties. Google Ads access alone is insufficient. |
+| `CONTENT_META_PAGE_ID`, `CONTENT_META_PAGE_ACCESS_TOKEN` | Numeric Facebook Page ID and existing token with Page content and Insights read access |
+| `CONTENT_META_API_VERSION` | Defaults to `v26.0`. Confirm that version and the metric set against the Okoo Page before relying on the numbers. |
+
+Configure only the sources you can authorize. Keep secrets in Render. A successful Shopify discovery seeds **Citizen Eco-Drive vs Automatic** using the published Journal article. A Facebook post joins the pilot when its attachment resolves to the article path and carries the exact source, medium, and campaign tags. Unassigned content appears under **All discovered content**. Product and Google Ads associations are explicit. Populate them only after confirming the Shopify product GID or Google Ads account and campaign resource. They are displayed as related entities rather than credited conversions.
+
+Trigger the job once and check **Content Marketing → Source status**. Compare the article's views, tagged landing sessions, and Google Search clicks to the source reports using the same dates. The first run looks back up to 90 days, bounded by publication date. Subsequent runs refresh 14 GA4 days and 7 finalized Search Console days, filling gaps after missed runs. Use `python -m backend.content_jobs --backfill` for a bounded replay after connecting a new Facebook link to an older article. Meta history starts with the first observation. Blank metrics indicate unavailable values, and lifetime observations are never summed.
+
+The pilot measures purchases recorded in sessions that began on the article. Validate the live Facebook link, GA4 checkout continuity, and purchase event parameters before using revenue to judge the campaign. Page discovery and reporting read from the providers. Publishing stays in Shopify and Facebook.
+
+[Shopify access tokens](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens) · [GA4 reporting API](https://developers.google.com/analytics/devguides/reporting/data/v1/quickstart) · [Search Console API](https://developers.google.com/webmaster-tools/v1/searchanalytics/query) · [Render cron jobs](https://render.com/docs/cronjobs)
+
 ## Tests
 
 ```powershell

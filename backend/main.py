@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -6,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from backend import demo, repositories as repo
+from backend import content_repository, demo, repositories as repo
 from backend.auth import Login, Refresh, current_user, session
 from backend.config import MODE
 from backend.connectors.google_ads import GoogleAdsError
@@ -56,6 +57,30 @@ def member(org: str, user=Depends(current_user)):
     if row is None:
         raise HTTPException(404, "Organization unavailable.")
     return row
+
+
+@app.get("/orgs/{org}/content")
+def content_catalog(org: str, _member=Depends(member)):
+    if MODE == "demo":
+        return {"campaigns": [], "items": [], "sources": []}
+    return content_repository.catalog(org)
+
+
+@app.get("/orgs/{org}/content/items/{item_id}")
+def content_details(org: str, item_id: UUID, start: date, end: date, _member=Depends(member)):
+    if start > end or end - start > timedelta(days=365):
+        raise HTTPException(422, "Choose a valid content date range of up to 366 days.")
+    item = None if MODE == "demo" else content_repository.details(org, str(item_id), start, end)
+    if item is None:
+        raise HTTPException(404, "Content item unavailable.")
+    return item
+
+
+@app.get("/orgs/{org}/content/campaigns/{slug}/links")
+def content_campaign_links(org: str, slug: str, _member=Depends(member)):
+    if MODE == "demo":
+        return {"products": [], "ads": []}
+    return content_repository.linked_entities(org, slug)
 
 
 def integration(org: str, membership=Depends(member)):

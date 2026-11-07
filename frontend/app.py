@@ -12,6 +12,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from frontend.client import APIError, call, clear_session, store_session
+from frontend.content_marketing import show_content_marketing
 from frontend.weekly_review import show_weekly_review
 from frontend.views import dashboard, campaigns, content, keywords, drafts, settings
 
@@ -27,6 +28,7 @@ st.markdown("""
 PAGES = {
     "Dashboard": dashboard, "Weekly Review": show_weekly_review, "Campaigns": campaigns, "Ad Content": content,
     "Keywords": keywords, "Drafts": drafts, "Settings": settings,
+    "Content Marketing": show_content_marketing,
 }
 
 
@@ -64,8 +66,11 @@ def app():
                                   format_func=lambda key: next(o["name"] for o in orgs if o["id"] == key))
     org = next(org for org in orgs if org["id"] == org_id)
     base = f"/orgs/{org_id}"
-    accounts = call(f"{base}/accounts")
     nav = st.sidebar.radio("Workspace", list(PAGES), key=f"nav:{org_id}")
+    if nav == "Content Marketing":
+        show_content_marketing(base)
+        return
+    accounts = call(f"{base}/accounts")
     account = None
     if accounts:
         mapping = {account["id"]: account for account in accounts}
