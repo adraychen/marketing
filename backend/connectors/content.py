@@ -22,6 +22,22 @@ def response_data(response):
     return response.json()
 
 
+def analytics_response(response):
+    if response.status_code == 403:
+        try:
+            error = response.json()["error"]
+            reasons = [detail.get("reason") for detail in error.get("details", [])]
+            if "SERVICE_DISABLED" in reasons:
+                raise ContentError("GA4 Data API is disabled for the credential's Cloud project. Enable analyticsdata.googleapis.com.")
+            if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in reasons:
+                raise ContentError("The Google credential lacks the analytics.readonly OAuth scope.")
+            if "sufficient permissions for this property" in error.get("message", "").lower():
+                raise ContentError("The Google credential lacks access to the configured GA4 property. Check its Viewer grant and property ID.")
+        except (ValueError, KeyError, AttributeError, TypeError):
+            pass
+    return response_data(response)
+
+
 def shopify_token(client, shop, client_id, client_secret):
     return response_data(client.post(
         f"https://{shop}/admin/oauth/access_token",
@@ -93,7 +109,7 @@ def analytics_reports(client, property_id, url, start, end, utms):
     for kind, dimension, metrics, extra, segment in reports:
         expressions = [{"filter": {"fieldName": key, "stringFilter": {"value": value, "caseSensitive": True}}}
                        for key, value in [(dimension, path), *extra]]
-        result = response_data(client.post(endpoint, headers=headers, json={
+        result = analytics_response(client.post(endpoint, headers=headers, json={
             "dateRanges": [{"startDate": start.isoformat(), "endDate": end.isoformat()}],
             "dimensions": [{"name": "date"}], "metrics": [{"name": name} for name in metrics],
             "dimensionFilter": {"andGroup": {"expressions": expressions}} if extra else expressions[0],

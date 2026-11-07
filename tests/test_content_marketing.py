@@ -16,6 +16,16 @@ ARTICLE = "https://okoostore.com/blogs/journal/citizen-eco-drive-vs-automatic"
 TAGGED = ARTICLE + "?utm_source=facebook&utm_medium=organic_social&utm_campaign=" + repo.PILOT
 
 
+@pytest.mark.parametrize(("error", "hint"), [
+    ({"details": [{"reason": "SERVICE_DISABLED", "metadata": {"private": "secret"}}]}, "Data API is disabled"),
+    ({"message": "User does not have sufficient permissions for this property. secret"}, "lacks access"),
+])
+def test_ga4_denial_logs_safe_hint(error, hint):
+    with pytest.raises(content.ContentError, match=hint) as exc:
+        content.analytics_response(httpx.Response(403, json={"error": error}))
+    assert "secret" not in str(exc.value)
+
+
 def test_ga4_requests_separate_page_landing_and_facebook_reports(monkeypatch):
     monkeypatch.setattr(content, "google_headers", lambda *_args: {})
     requests = []
