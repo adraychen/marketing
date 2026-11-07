@@ -52,7 +52,7 @@ def app():
 
     orgs = call("/orgs")
     st.sidebar.title("Okoo Marketing")
-    st.sidebar.caption("GOOGLE ADS")
+    st.sidebar.caption("GOOGLE ADS · CONTENT MARKETING")
     if mode == "live" and st.sidebar.button("Sign out"):
         clear_session()
         st.rerun()
