@@ -25,7 +25,9 @@ def write_items(cur, org, source, source_account, items):
             insert into marketing_content_items
                 (organization_id,source,source_account,external_id,title,url,published_at,data) values %s
             on conflict (organization_id,source,source_account,external_id) do update set
-                title=excluded.title,url=excluded.url,published_at=excluded.published_at,data=excluded.data,active=true
+                title=excluded.title,url=excluded.url,published_at=excluded.published_at,
+                data=coalesce(jsonb_strip_nulls(jsonb_build_object('indexing', marketing_content_items.data->'indexing')),
+                              '{}'::jsonb) || excluded.data,active=true
         """, [(org, source, source_account, item["external_id"], item["title"], item["url"],
                item["published_at"], Json(item["data"])) for item in items])
     cur.execute("""
@@ -97,6 +99,21 @@ def sync_status(org, source, status, records=0, message=None):
         """, (org, source, status, records, message))
 
 
+def write_snapshot(cur, org, item_id, day, version, metrics):
+    scope = (org, item_id, day, version)
+    payload = Json(metrics)
+    cur.execute("""
+        insert into marketing_content_metric_snapshots
+            (organization_id,item_id,observed_day,api_version,metrics,observed_at)
+        select %s,%s,%s,%s,%s,clock_timestamp()
+        where %s::jsonb is distinct from (
+            select metrics from marketing_content_metric_snapshots
+            where organization_id=%s and item_id=%s and observed_day=%s and api_version=%s
+            order by observed_at desc limit 1
+        )
+    """, (*scope, payload, payload, *scope))
+
+
 def catalog(org):
     with database() as cur:
         cur.execute("select slug,name from marketing_content_campaigns where organization_id=%s order by name", (org,))
@@ -110,7 +127,8 @@ def catalog(org):
         """, (org,))
         items = cur.fetchall()
         cur.execute("""
-            select distinct on (source) source,status,records,message,finished_at
+            select distinct on (source) source,status,records,message,finished_at,
+                max(finished_at) filter (where status='succeeded') over (partition by source) as last_success_at
             from marketing_content_sync_runs where organization_id=%s order by source,finished_at desc
         """, (org,))
         return {"campaigns": campaigns, "items": items, "sources": cur.fetchall()}
@@ -118,7 +136,8 @@ def catalog(org):
 
 def details(org, item_id, start, end):
     with database() as cur:
-        cur.execute("select data from marketing_content_items where organization_id=%s and id=%s", (org, item_id))
+        cur.execute("select data, external_id from marketing_content_items where organization_id=%s and id=%s",
+                    (org, item_id))
         item = cur.fetchone()
         if not item:
             return None
@@ -143,9 +162,10 @@ def details(org, item_id, start, end):
         data = item["data"]
         review_fields = ("message", "hashtags", "links", "tags", "handle", "blog", "image", "updatedAt",
                          "seo_title", "meta_description", "canonical_url", "social_title", "social_description",
-                         "seo_status")
+                         "seo_status", "seo_checked_at", "indexing", "content_type", "media_reference", "video_id")
         return {"daily": daily, "snapshots": snapshots, "links": cur.fetchall(),
-                "metadata": {field: data[field] for field in review_fields if field in data}}
+                "metadata": {"external_id": item["external_id"],
+                             **{field: data[field] for field in review_fields if field in data}}}
 
 
 def linked_entities(org, slug):

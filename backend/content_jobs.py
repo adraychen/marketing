@@ -11,11 +11,11 @@ from psycopg2.extras import Json
 from backend import content_repository as repo
 from backend.config import MODE
 from backend.connectors.content import (
-    ContentError, analytics_reports, facebook_metrics, facebook_posts, search_reports, shopify_articles, shopify_token,
+    ContentError, analytics_reports, facebook_metrics, facebook_posts, inspect_article, search_article_url,
+    search_reports, shopify_articles, shopify_token,
 )
 from backend.repositories import database
 
-SOURCES = ("shopify", "facebook", "ga4", "search_console", "facebook_insights")
 SOURCE_ERRORS = (ContentError, httpx.HTTPError, KeyError, TypeError, ValueError)
 
 
@@ -56,12 +56,13 @@ def latest_day(cur, org, item_id, source_account, report):
 def report_items(client, org, source, source_account, shop, backfill_days, force):
     if not source_account or not shop:
         return finish(org, source, "skipped", message="Source property or Shopify account is missing.")
-    if source == "ga4":
+    is_ga4 = source in ("ga4", "ga4_traffic")
+    if is_ga4:
         if not re.fullmatch(r"[0-9]+", source_account):
             return finish(org, source, "failed", message="Set GA4_PROPERTY_ID to a numeric property ID.")
         timezone = environment("CONTENT_GA4_TIMEZONE", "America/Toronto")
         refresh_days, lag = 14, 1
-        reports = ["ga4_views", "ga4_landing", "ga4_facebook"]
+        reports = ["ga4_traffic"] if source == "ga4_traffic" else ["ga4_views", "ga4_landing", "ga4_facebook"]
     else:
         timezone = "America/Los_Angeles"
         refresh_days, lag = 7, 3
@@ -84,13 +85,18 @@ def report_items(client, org, source, source_account, shop, backfill_days, force
             earliest = end - timedelta(days=backfill_days - 1)
             if latest and not force:
                 earliest = min(end - timedelta(days=refresh_days - 1), latest + timedelta(days=1))
-            start = max(article["published_at"].astimezone(ZoneInfo(timezone)).date(), earliest)
+            publication = article["published_at"].astimezone(ZoneInfo(timezone)).date()
+            start = max(publication - timedelta(days=7 if is_ga4 else 0), earliest)
             if start > end:
                 continue
-            if source == "ga4":
-                rows = list(analytics_reports(client, source_account, article["url"], start, end, utms))
+            if is_ga4:
+                rows = list(analytics_reports(client, source_account, article["url"], start, end, utms, kinds=reports))
             else:
-                rows = list(search_reports(client, source_account, article["url"], start, end))
+                data = article["data"]
+                google_url = (data.get("indexing") or {}).get("googleCanonical")
+                declared_url = search_article_url(source_account, article["url"], data.get("canonical_url"))
+                url = search_article_url(source_account, declared_url, google_url)
+                rows = list(search_reports(client, source_account, url, start, end))
             with database() as cur:
                 repo.write_daily(cur, org, article["id"], source_account, reports, start, end, rows)
             records += len(rows)
@@ -98,7 +104,30 @@ def report_items(client, org, source, source_account, shop, backfill_days, force
             failures += 1
             first_error = first_error or message(exc)
     status = "succeeded" if not failures else "failed" if failures == len(articles) else "partial"
+    if source == "search_console" and status == "succeeded" and not records:
+        first_error = "No finalized page or query rows returned for the article URLs and dates requested."
     return finish(org, source, status, records, first_error)
+
+
+def article_indexing(client, org, site, shop):
+    source = "search_console_inspection"
+    if not site or not shop:
+        finish(org, source, "skipped", message="Source property or Shopify account is missing.")
+        return
+    with database() as cur:
+        articles = repo.read_items(cur, org, "shopify", shop)
+    verified = 0
+    for article in articles:
+        result = inspect_article(client, site, article["url"])
+        verified += result["status"] in ("Indexed", "Not indexed")
+        with database() as cur:
+            cur.execute("""
+                update marketing_content_items
+                set data = jsonb_set(data, '{indexing}', %s, true)
+                where organization_id=%s and id=%s
+            """, (Json(result), org, article["id"]))
+    status = "succeeded" if articles and verified == len(articles) else "partial" if verified else "skipped"
+    finish(org, source, status, verified, None if status == "succeeded" else "See per-article inspection availability.")
 
 
 def post_insights(client, org, page, token, version):
@@ -112,16 +141,15 @@ def post_insights(client, org, page, token, version):
     records, failures, first_error = 0, 0, None
     for post in posts:
         try:
-            metrics = facebook_metrics(client, post["external_id"], token, version)
-            if not metrics:
-                raise ContentError("Meta returned no supported metrics for a post. Check Insights access.")
+            availability = {}
+            metrics = facebook_metrics(client, post["external_id"], token, version,
+                                       availability=availability, video_id=post["data"].get("video_id"))
+            if not metrics and any(state in {"Permission unavailable", "API request failure"}
+                                   for state in availability.values()):
+                failures += 1
+                first_error = first_error or "Meta Insights access or requests failed for a post."
             with database() as cur:
-                cur.execute("""
-                    insert into marketing_content_metric_snapshots
-                        (organization_id,item_id,observed_day,api_version,metrics) values (%s,%s,%s,%s,%s)
-                    on conflict (organization_id,item_id,observed_day,api_version) do update set
-                        metrics=excluded.metrics,observed_at=now()
-                """, (org, post["id"], today, version, Json(metrics)))
+                repo.write_snapshot(cur, org, post["id"], today, version, {**metrics, "availability": availability})
             records += 1
         except SOURCE_ERRORS as exc:
             failures += 1
@@ -183,6 +211,8 @@ def main():
         with database() as cur:
             repo.associate(cur, org, shop, page)
         failed |= report_items(client, org, "ga4", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
+        failed |= report_items(client, org, "ga4_traffic", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
+        article_indexing(client, org, environment("CONTENT_GSC_SITE"), shop)
         failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
         failed |= post_insights(client, org, page, meta_token, version)
     return int(failed)

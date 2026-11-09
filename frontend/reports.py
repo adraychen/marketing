@@ -9,13 +9,14 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from backend.metrics import previous_period, summarize
+from backend.metrics import previous_period, ratio, summarize
 from backend.models import Creative
 from backend.review import MIN_CLICKS, weekly_review
 from backend.validation import validate
 from frontend.client import APIError, call
 from frontend.content_marketing import GA_LABELS, SOURCE_LABELS, grouped
 from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
+from frontend.visibility import facebook_changes, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review
 from frontend.views import coverage, metric_by_resource, period_rows
 
 INLINE_LIMIT = 200_000
@@ -285,17 +286,44 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     report.table("Content source status", [
         {"source": source, "label": label, "status": sources.get(source, {}).get("status", "No sync recorded"),
          "records": sources.get(source, {}).get("records"),
-         "finished_at": sources.get(source, {}).get("finished_at")}
+         "finished_at": sources.get(source, {}).get("finished_at"),
+         "last_success_at": sources.get(source, {}).get("last_success_at"),
+         "details": sources.get(source, {}).get("message")}
         for source, label in SOURCE_LABELS.items()
     ])
     daily, snapshots, post_links = [], [], []
     article_review, facebook_review = [], []
+    search, queries, diagnostics, facebook, reels, intervals, coverage_rows = [], [], [], [], [], [], []
     for item in items:
         details = call(f"{route}/items/{item['id']}", params=params)
         context = {"item_id": item["id"], "title": item["title"]}
         metadata = details.get("metadata", {})
         review = {**context, "published_at": item["published_at"], "url": item["url"]}
+        item_daily = details["daily"]
+        item_snapshots = details["snapshots"]
         if item["source"] == "shopify":
+            for report_kind in ("ga4_views", "ga4_landing", "ga4_traffic", "ga4_facebook", "gsc_page", "gsc_query"):
+                if report_kind == "gsc_query" and not terms:
+                    continue
+                for (source,), records in grouped(
+                    [row for row in item_daily if row["report"] == report_kind], "source_account"
+                ).items() or [((None,), [])]:
+                    days = [row["day"] for row in records]
+                    coverage_rows.append({**context, "report": report_kind, "source_account": source,
+                                          "requested_start": params["start"], "requested_end": params["end"],
+                                          "available_start": min(days, default=None), "available_end": max(days, default=None),
+                                          "rows": len(records), "reported_fields": sorted({
+                                              key for row in records for key in row["metrics"]
+                                          })})
+        else:
+            days = [row["observed_day"] for row in item_snapshots]
+            coverage_rows.append({**context, "report": "facebook_insights", "requested_start": params["start"],
+                                  "requested_end": params["end"], "available_start": min(days, default=None),
+                                  "available_end": max(days, default=None), "rows": len(days),
+                                  "reported_fields": sorted({key for row in item_snapshots for key in row["metrics"]
+                                                             if key != "availability"})})
+        if item["source"] == "shopify":
+            seo = seo_review(item, metadata)
             article_review.append({
                 **review, "blog": (metadata.get("blog") or {}).get("title"), "handle": metadata.get("handle"),
                 "updated_at": metadata.get("updatedAt"), "tags": metadata.get("tags"),
@@ -303,22 +331,75 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                 "seo_status": metadata.get("seo_status", "SEO metadata has not been collected"),
                 **{key: metadata.get(key) for key in ("seo_title", "meta_description", "canonical_url",
                                                       "social_title", "social_description")},
+                **seo,
             })
+            pages = [row for row in item_daily if row["report"] == "gsc_page"]
+            properties = grouped(pages, "source_account")
+            for (source,), records in properties.items() or [((None,), [])]:
+                search.append({**context, "property": source, "indexing_status": seo["indexing_status"],
+                               "page_rows": len(records), **search_totals(records)})
+            if terms:
+                queries.extend({**context, **row} for row in search_queries(item_daily)[:20])
+            observations = list(seo["warnings"])
+            if not pages:
+                observations.append("No Search Console page rows for these dates. This does not establish zero impressions or indexing failure.")
+            for (source,), records in properties.items():
+                totals = search_totals(records)
+                if totals["impressions"] and totals["clicks"] == 0:
+                    observations.append(f"{source} reported {totals['impressions']:,} impressions and zero clicks.")
+            for row in prepublication_rows(item, item_daily):
+                observations.append(f"GA4 reported {row['views']:g} views on {row['day']} before the recorded "
+                                    f"publication date {row['publication_date_in_ga4_timezone']} in {row['timezone']}. "
+                                    "Check publication history, previews, and path reuse.")
+            diagnostics.extend({**context, "observation": note} for note in observations)
         elif item["source"] == "facebook":
+            kind = metadata.get("content_type", "unknown")
             facebook_review.append({
                 **review, "post_text": metadata.get("message"), "hashtags": metadata.get("hashtags"),
                 "destination_links": metadata.get("links"),
+                "facebook_id": metadata.get("external_id"), "content_type": kind,
+                "media_reference": metadata.get("media_reference"),
+                "distribution": "Published Page content. Paid distribution is unverified.",
                 "metadata_status": "Imported" if "message" in metadata else "Post text has not been collected",
             })
-        daily.extend({**context, **split_metrics(row)} for row in details["daily"]
-                     if terms or row["report"] != "gsc_query")
-        snapshots.extend({**context, **split_metrics(row)} for row in details["snapshots"])
+            latest = {**context, "content_type": kind, **facebook_latest(item_snapshots, kind)}
+            facebook.append(latest)
+            if kind in {"reel", "video"}:
+                reels.append(latest)
+            intervals.extend({**context, **row} for row in facebook_changes(item_snapshots))
+            if not item_snapshots or latest["post_media_view"] is None:
+                diagnostics.append({**context, "observation": "Facebook media views are unavailable in the latest observation."})
+            if kind == "reel" and latest["total_video_retention_graph"] is None:
+                diagnostics.append({**context, "observation": "Meta did not return a reel retention graph for the latest observation."})
+        daily.extend({**context, **split_metrics(row)} for row in item_daily if terms or row["report"] != "gsc_query")
+        snapshots.extend({**context, "period": "lifetime", **split_metrics(row)} for row in item_snapshots)
         post_links.extend({**context, **row} for row in details["links"])
+    seo_titles = defaultdict(list)
+    for article in article_review:
+        if article["seo_title"]:
+            seo_titles[article["seo_title"].strip().casefold()].append(article)
+    for matches in seo_titles.values():
+        if len(matches) > 1:
+            for article in matches:
+                note = "SEO title is shared by multiple articles in this report."
+                article["warnings"].append(note)
+                diagnostics.append({"item_id": article["item_id"], "title": article["title"], "observation": note})
     report.note("Shopify SEO fields describe the live article page at sync time. Social titles and descriptions "
                 "are the Open Graph tags published by the storefront. Facebook rows describe Page posts. "
                 "Paid Meta ad creative and ad-level performance require a Meta Ads account connection.")
     report.table("Shopify article review", article_review)
+    report.table("Google Search Console article performance", search)
+    if terms:
+        report.table("Google Search queries by article", queries)
     report.table("Facebook Page post review", facebook_review)
+    report.table("Facebook content visibility", facebook)
+    report.table("Facebook reel and video performance", reels)
+    report.table("Facebook lifetime interval changes", intervals)
+    report.note("Facebook interval changes compare observations for the same API version. Decreases may be corrections. "
+                "Intervals do not establish exact daily performance. Unique viewers are neither Page reach nor additive. "
+                "Reach, impressions, and paid or organic reach are unavailable from this import.")
+    report.table("Content data coverage", coverage_rows)
+    report.table("Content visibility diagnostics", diagnostics)
     totals = []
     for keys, rows in grouped(daily, "item_id", "title", "report", "source_account",
                               "segment", "currency", "timezone").items():
@@ -326,7 +407,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
         total = {"item_id": item_id, "title": title, "report": kind, "source_account": source,
                  "segment": segment, "currency": currency, "timezone": zone}
         if kind.startswith("ga4_"):
-            for metric in GA_LABELS.keys() - {"activeUsers"}:
+            for metric in GA_LABELS.keys() - {"activeUsers", "newUsers", "engagementRate"}:
                 column = f"metric_{metric}"
                 if any(column in row for row in rows):
                     total[column] = sum(row.get(column, 0) for row in rows)
@@ -341,6 +422,15 @@ def add_content(report, route, catalog, campaign, params, terms=False):
             continue
         totals.append(total)
     report.table("Content performance totals", totals)
+    report.note("Search Console uses finalized data through a three-day sync lag. Page totals are separate from "
+                "visible queries, which can be anonymized or omitted by API row limits. GA4 daily active users "
+                "and new users are not summed across dates or traffic segments.")
+    report.table("Shopify article traffic by source", [
+        {**row, **json.loads(row["segment"]),
+         "average_engagement_seconds_per_session": ratio(row.get("metric_userEngagementDuration"),
+                                                         row.get("metric_sessions"))}
+        for row in daily if row["report"] == "ga4_traffic"
+    ])
     report.table("GA4 and Search Console daily metrics", daily)
     report.table("Facebook Insights lifetime observations", snapshots)
     report.table("Content links and UTM tags", post_links)
@@ -393,6 +483,7 @@ def show_reports(org, base, account, mode):
                 "content_campaign": campaigns.get(campaign, "All discovered content"),
                 "start": start.isoformat(), "end": end.isoformat(),
                 "includes_search_terms": terms, "includes_saved_drafts": drafts,
+                "content_visibility_objective": "Increase Shopify blog article and Facebook content views",
             }])
             params = {"start": start.isoformat(), "end": end.isoformat()}
             if account:

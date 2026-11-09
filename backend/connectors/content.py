@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -11,6 +11,8 @@ from google.auth.transport.requests import Request
 
 SHOPIFY_VERSION = "2026-10"
 META_METRICS = ("post_media_view", "post_total_media_view_unique", "post_clicks", "post_clicks_by_type")
+META_VIDEO_METRICS = ("total_video_views", "total_video_view_total_time", "total_video_avg_time_watched",
+                      "total_video_retention_graph")
 
 
 class ContentError(Exception):
@@ -102,7 +104,8 @@ def storefront_metadata(client, url):
     if title:
         head.fields["seo_title"] = title
     complete = all(head.fields.get(key) for key in ("seo_title", "meta_description", "canonical_url"))
-    return {**head.fields, "seo_status": "Read from published page" if complete else "Some SEO fields were unavailable"}
+    return {**head.fields, "seo_status": "Read from published page" if complete else "Some SEO fields were unavailable",
+            "seo_checked_at": datetime.now(timezone.utc).isoformat()}
 
 
 def shopify_articles(client, shop, token, storefront, blog):
@@ -155,38 +158,100 @@ def metric_row(report, day, timezone, metrics, *, segment="", currency=None):
     return dict(report=report, day=day, timezone=timezone, currency=currency, segment=segment, metrics=metrics)
 
 
-def analytics_reports(client, property_id, url, start, end, utms):
+def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None):
     endpoint = f"https://analyticsdata.googleapis.com/v1beta/properties/{property_id}:runReport"
     headers = google_headers(endpoint, "analytics.readonly")
     path = urlsplit(url).path
     landing = ("sessions", "engagedSessions", "ecommercePurchases", "purchaseRevenue")
-    reports = [("ga4_views", "pagePath", ("screenPageViews", "activeUsers"), [], ""),
-               ("ga4_landing", "landingPage", landing, [], "")]
+    acquisition = ("sessions", "engagedSessions", "engagementRate", "userEngagementDuration", "activeUsers", "newUsers")
+    traffic_dimensions = ("landingPage", "sessionSource", "sessionMedium", "sessionDefaultChannelGroup")
+    reports = [("ga4_views", "pagePath", ("screenPageViews", "activeUsers", "userEngagementDuration"), [], "", ()),
+               ("ga4_landing", "landingPage", landing, [], "", ())]
     for utm in utms:
         filters = [("sessionManualSource", utm["utm_source"]), ("sessionManualMedium", utm["utm_medium"]),
                    ("sessionManualCampaignName", utm["utm_campaign"])]
         if utm.get("utm_content"):
             filters.append(("sessionManualAdContent", utm["utm_content"]))
-        reports.append(("ga4_facebook", "landingPage", landing, filters, json.dumps(utm, sort_keys=True)))
-    for kind, dimension, metrics, extra, segment in reports:
-        expressions = [{"filter": {"fieldName": key, "stringFilter": {"value": value, "caseSensitive": True}}}
-                       for key, value in [(dimension, path), *extra]]
-        result = analytics_response(client.post(endpoint, headers=headers, json={
+        reports.append(("ga4_facebook", "landingPage", landing, filters, json.dumps(utm, sort_keys=True), ()))
+    reports.append(("ga4_traffic", "landingPage", acquisition, [], "", traffic_dimensions))
+    for kind, dimension, metrics, extra, segment, breakdown in reports:
+        if kinds is not None and kind not in kinds:
+            continue
+        paths = sorted({path.rstrip("/"), path.rstrip("/") + "/"})
+        expressions = [{"filter": {"fieldName": dimension, "inListFilter": {"values": paths, "caseSensitive": True}}}]
+        expressions.extend({"filter": {"fieldName": key, "stringFilter": {"value": value, "caseSensitive": True}}}
+                           for key, value in extra)
+        request = {
             "dateRanges": [{"startDate": start.isoformat(), "endDate": end.isoformat()}],
-            "dimensions": [{"name": "date"}], "metrics": [{"name": name} for name in metrics],
+            "dimensions": [{"name": name} for name in ("date", *breakdown)],
+            "metrics": [{"name": name} for name in metrics],
             "dimensionFilter": {"andGroup": {"expressions": expressions}} if extra else expressions[0],
-        }))
-        metadata = result.get("metadata", {})
-        # Do not replace prior values with empty rows from a thresholded report.
-        if metadata.get("subjectToThresholding") or metadata.get("dataLossFromOtherRow"):
-            raise ContentError("GA4 returned a thresholded or aggregated report. Existing data was kept.")
-        if metadata.get("schemaRestrictionResponse", {}).get("activeMetricRestrictions"):
-            raise ContentError("GA4 restricted one or more metrics. Check access to revenue data.")
-        for row in result.get("rows", []):
-            day = datetime.strptime(row["dimensionValues"][0]["value"], "%Y%m%d").date()
-            values = {key: float(item["value"]) for key, item in zip(metrics, row["metricValues"], strict=True)}
-            yield metric_row(kind, day, metadata["timeZone"], values,
-                             currency=metadata.get("currencyCode"), segment=segment)
+            "limit": "10000", "offset": "0",
+            "orderBys": [{"dimension": {"dimensionName": name}} for name in ("date", *breakdown)],
+        }
+        while True:
+            result = analytics_response(client.post(endpoint, headers=headers, json=request))
+            metadata = result.get("metadata", {})
+            if metadata.get("subjectToThresholding") or metadata.get("dataLossFromOtherRow"):
+                raise ContentError("GA4 returned a thresholded or aggregated report. Existing data was kept.")
+            if metadata.get("schemaRestrictionResponse", {}).get("activeMetricRestrictions"):
+                raise ContentError("GA4 restricted one or more metrics. Check access to revenue data.")
+            rows = result.get("rows", [])
+            for row in rows:
+                day_value, *dimensions = [value["value"] for value in row["dimensionValues"]]
+                day = datetime.strptime(day_value, "%Y%m%d").date()
+                values = {key: float(item["value"]) for key, item in zip(metrics, row["metricValues"], strict=True)}
+                key = json.dumps(dict(zip(breakdown, dimensions, strict=True)), sort_keys=True) if breakdown else segment
+                yield metric_row(kind, day, metadata["timeZone"], values,
+                                 currency=metadata.get("currencyCode"), segment=key)
+            offset = int(request["offset"]) + len(rows)
+            if not rows or offset >= result.get("rowCount", offset):
+                break
+            request["offset"] = str(offset)
+
+
+def search_article_url(site, url, canonical=None):
+    def parts(candidate):
+        try:
+            return urlsplit(candidate or "")
+        except ValueError:
+            return urlsplit("")
+
+    original, declared = parts(url), parts(canonical)
+    property_url = parts(site)
+    if site.startswith("sc-domain:"):
+        domain = site.removeprefix("sc-domain:").lower()
+        in_property = declared.hostname == domain or (declared.hostname or "").endswith("." + domain)
+    else:
+        in_property = (declared.scheme == property_url.scheme and declared.netloc == property_url.netloc
+                       and declared.path.startswith(property_url.path or "/"))
+    if (in_property and declared.scheme in ("http", "https") and not declared.username and not declared.password
+            and declared.path.rstrip("/") == original.path.rstrip("/") and not declared.query and not declared.fragment):
+        return declared.geturl()
+    return original._replace(query="", fragment="").geturl()
+
+
+def inspect_article(client, site, url):
+    endpoint = "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
+    now = datetime.now(timezone.utc).isoformat()
+    manual = "https://search.google.com/search-console/inspect?resource_id=" + quote(site, safe="")
+    result = {"checked_at": now, "inspected_url": url, "manual_url": manual}
+    try:
+        response = client.post(endpoint, headers=google_headers(endpoint, "webmasters.readonly"),
+                               json={"siteUrl": site, "inspectionUrl": url, "languageCode": "en"})
+        if not response.is_success:
+            status = "Permission unavailable" if response.status_code in (401, 403) else "API request failure"
+            return {**result, "status": status, "http_status": response.status_code}
+        inspection = response.json()["inspectionResult"]
+        fields = inspection.get("indexStatusResult", {})
+    except (ContentError, httpx.HTTPError, KeyError, TypeError, ValueError):
+        return {**result, "status": "API request failure"}
+    verdict = fields.get("verdict")
+    status = {"PASS": "Indexed", "FAIL": "Not indexed", "NEUTRAL": "Not indexed"}.get(verdict, "Unavailable")
+    return {**result, "status": status, "inspection_url": inspection.get("inspectionResultLink"),
+            **{key: fields[key] for key in ("verdict", "coverageState", "indexingState", "lastCrawlTime",
+                                           "googleCanonical", "userCanonical", "pageFetchState", "robotsTxtState")
+               if key in fields}}
 
 
 def search_reports(client, site, url, start, end):
@@ -238,7 +303,8 @@ def post_hashtags(message):
 def facebook_posts(client, page, token, version):
     endpoint = f"https://graph.facebook.com/{version}/{page}/published_posts"
     headers = {"Authorization": f"Bearer {token}"}
-    params = {"fields": "id,message,created_time,permalink_url,attachments{url,target,subattachments{url,target}}",
+    params = {"fields": "id,message,created_time,permalink_url,"
+                        "attachments{url,target,type,media_type,media,subattachments{url,target}}",
               "limit": 50}
     while True:
         body = response_data(client.get(endpoint, headers=headers, params=params))
@@ -246,51 +312,85 @@ def facebook_posts(client, page, token, version):
             message = post.get("message") or ""
             links = {url for match in re.findall(r'https?://[^\s<>"\']+', message)
                      if (url := destination(match.rstrip(".,);]")))}
-            for attachment in post.get("attachments", {}).get("data", []):
+            attachments = post.get("attachments", {}).get("data", [])
+            for attachment in attachments:
                 for item in [attachment, *attachment.get("subattachments", {}).get("data", [])]:
                     for candidate in (item.get("url"), (item.get("target") or {}).get("url")):
                         url = destination(candidate)
                         if url:
                             links.add(url)
             title = message.strip().splitlines()
+            first = next(iter(attachments), {})
+            permalink = destination(post.get("permalink_url"))
+            attachment_type = (first.get("media_type") or first.get("type") or "").lower()
+            attachment_path = urlsplit(destination(first.get("url")) or "").path
+            if "/reel/" in urlsplit(permalink or "").path or "/reel/" in attachment_path:
+                kind = "reel"
+            elif "video" in attachment_type:
+                kind = "video"
+            elif attachment_type in {"photo", "image", "album"}:
+                kind = "photo"
+            elif links:
+                kind = "link"
+            else:
+                kind = "text" if message and not attachments else "unknown"
+            target_id = str((first.get("target") or {}).get("id") or "")
             yield {"external_id": post["id"], "title": title[0][:180] if title else "Facebook post",
-                   "url": destination(post.get("permalink_url")), "published_at": post["created_time"],
-                   "data": {"links": sorted(links), "message": message, "hashtags": post_hashtags(message)}}
+                   "url": permalink, "published_at": post["created_time"],
+                   "data": {"links": sorted(links), "message": message, "hashtags": post_hashtags(message),
+                            "content_type": kind,
+                            "video_id": target_id if kind in {"reel", "video"} and target_id.isdecimal() else None,
+                            "media_reference": destination(((first.get("media") or {}).get("image") or {}).get("src"))}}
         paging = body.get("paging", {})
         if not paging.get("next"):
             return
         params["after"] = paging["cursors"]["after"]
 
 
-def facebook_metrics(client, post, token, version):
+def facebook_metrics(client, post, token, version, *, availability=None, video_id=None):
     endpoint = f"https://graph.facebook.com/{version}/{post}"
     headers = {"Authorization": f"Bearer {token}"}
-    # Probe independently so one unsupported field cannot erase other observations.
+    states = availability if availability is not None else {}
     results = {}
+    def read(url, params, key):
+        try:
+            response = client.get(url, headers=headers, params=params)
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            states[key] = "API request failure"
+            return {}
+        if not response.is_success or body.get("error"):
+            code = body.get("error", {}).get("code")
+            if response.status_code in (401, 403) or code in (10, 190, 200):
+                states[key] = "Permission unavailable"
+            elif code == 100:
+                states[key] = "Unsupported or inaccessible for this content"
+            else:
+                states[key] = "API request failure"
+            return {}
+        states[key] = "No data returned"
+        return body
+
     for field in ("reactions", "comments", "shares"):
         expression = field if field == "shares" else f"{field}.limit(0).summary(true)"
-        response = client.get(endpoint, headers=headers, params={"fields": expression})
-        if meta_metric_unavailable(response):
-            continue
-        data = response_data(response).get(field)
+        data = read(endpoint, {"fields": expression}, field).get(field)
         if data is not None:
             count = data.get("count") if field == "shares" else data.get("summary", {}).get("total_count")
             if isinstance(count, int):
                 results[field] = count
-    for metric in META_METRICS:
-        response = client.get(f"{endpoint}/insights", headers=headers, params={"metric": metric, "period": "lifetime"})
-        if meta_metric_unavailable(response):
-            continue
-        for entry in response_data(response).get("data", []):
+                states[field] = "Reported"
+    requests = [(f"{endpoint}/insights", metric) for metric in META_METRICS]
+    if video_id:
+        requests.extend((f"https://graph.facebook.com/{version}/{video_id}/video_insights", metric)
+                        for metric in META_VIDEO_METRICS)
+    for url, metric in requests:
+        params = {"metric": metric}
+        if url.endswith("/insights"):
+            params["period"] = "lifetime"
+        for entry in read(url, params, metric).get("data", []):
             values = entry.get("values", [])
             value = entry.get("total_value", {}).get("value", values[-1].get("value") if values else None)
             if value is not None:
                 results[metric] = value
+                states[metric] = "Reported"
     return results
-
-
-def meta_metric_unavailable(response):
-    if response.status_code == 400:
-        code = response.json().get("error", {}).get("code")
-        return code in {100, 10, 200}
-    return False
