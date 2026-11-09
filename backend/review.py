@@ -57,6 +57,7 @@ def weekly_review(report, account, start, end):
                 "campaign": campaign.get("name"), "ad_group": group.get("data", {}).get("name"),
                 "status": data.get("status"), "match_type": data.get("match_type"),
                 "daily_budget": data.get("daily_budget"), "campaign_type": data.get("type"),
+                "bidding_strategy": data.get("bidding_strategy"),
                 "current": {key: now[key] for key in MEASURES},
                 "previous": {key: before[key] for key in MEASURES},
                 "spend_delta": now["spend"] - before["spend"],

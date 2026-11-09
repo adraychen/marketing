@@ -15,7 +15,7 @@ from backend.jobs import SyncBusy, configured_org, connector, run_sync
 from backend.metrics import previous_period
 from backend.models import DraftInput
 from backend.review import MIN_CLICKS, weekly_review
-from backend.review_ai import ReviewAIError, enabled as review_ai_enabled, explain
+from backend.review_ai import FOCUS_PROMPTS, ReviewAIError, enabled as review_ai_enabled, explain
 from backend.validation import validate
 
 app = FastAPI(title="Okoo Marketing Dashboard", version="1.0", debug=False)
@@ -136,11 +136,13 @@ def report(org: str, account_id: str, start: date, end: date, account=Depends(se
 
 @app.post("/orgs/{org}/accounts/{account_id}/weekly-review/ai")
 def weekly_review_ai(org: str, account_id: str, end: date,
-                     account=Depends(selected_account), membership=Depends(member)):
+                     account=Depends(selected_account), membership=Depends(member), focus: str = "performance"):
     if MODE != "live" or not review_ai_enabled():
         raise HTTPException(409, "AI summaries are unavailable on this backend.")
     if membership["role"] != "admin":
         raise HTTPException(403, "An organization admin must request the AI summary.")
+    if focus not in FOCUS_PROMPTS:
+        raise HTTPException(422, "Choose a supported AI review focus.")
     today = datetime.now(ZoneInfo(account["timezone"])).date()
     if not date(2000, 1, 14) <= end < today:
         raise HTTPException(422, "Choose a completed week for this account.")
@@ -152,7 +154,7 @@ def weekly_review_ai(org: str, account_id: str, end: date,
     if not review["ai_ready"]:
         raise HTTPException(409, f"The AI summary needs at least {MIN_CLICKS} clicks in each week.")
     try:
-        return {"summary": explain(review, account["currency"])}
+        return explain(review, account["currency"], focus)
     except ReviewAIError as exc:
         raise HTTPException(502, str(exc)) from None
 

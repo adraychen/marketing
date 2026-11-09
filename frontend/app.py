@@ -13,6 +13,7 @@ if project_root not in sys.path:
 
 from frontend.client import APIError, call, clear_session, store_session
 from frontend.content_marketing import show_content_marketing
+from frontend.reports import show_reports
 from frontend.weekly_review import show_weekly_review
 from frontend.views import dashboard, campaigns, content, keywords, drafts, settings
 
@@ -28,7 +29,7 @@ st.markdown("""
 PAGES = {
     "Dashboard": dashboard, "Weekly Review": show_weekly_review, "Campaigns": campaigns, "Ad Content": content,
     "Keywords": keywords, "Drafts": drafts, "Settings": settings,
-    "Content Marketing": show_content_marketing,
+    "Content Marketing": show_content_marketing, "Reports": show_reports,
 }
 
 
@@ -82,6 +83,9 @@ def app():
         st.success(flash)
     if nav == "Settings":
         settings(mode, org, base, account)
+        return
+    if nav == "Reports":
+        show_reports(org, base, account, mode)
         return
     if account is None:
         st.title(nav)

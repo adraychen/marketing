@@ -63,17 +63,24 @@ def test_ai_summary_sends_only_anonymized_evidence(monkeypatch):
         assert url == "https://api.groq.com/openai/v1/chat/completions"
         assert kwargs["headers"]["Authorization"] == "Bearer test"
         payload = kwargs["json"]
-        assert payload["model"] == "openai/gpt-oss-20b"
+        assert payload["model"] == "openai/gpt-oss-120b"
+        assert review_ai.FOCUS_PROMPTS["strategies"] in payload["messages"][0]["content"]
         content = payload["messages"][1]["content"]
         assert "Private" not in content
         evidence = json.loads(content)
+        assert evidence["campaigns"][0]["alias"] == "Campaign 1"
         assert evidence["signals"][0]["current"]["spend"] == 55
         return httpx.Response(200, request=httpx.Request("POST", url), json={
             "choices": [{"finish_reason": "stop", "message": {"content": "Review the change."}}],
         })
 
     monkeypatch.setattr(review_ai.httpx, "post", post)
-    assert review_ai.explain(weekly_review(snapshot(), ACCOUNT, START, END), "CAD") == "Review the change."
+    result = review_ai.explain(weekly_review(snapshot(), ACCOUNT, START, END), "CAD", "strategies")
+    assert result == {
+        "summary": "Review the change.",
+        "model": "openai/gpt-oss-120b",
+        "campaign_labels": {"Campaign 1": "Private campaign"},
+    }
 
 
 @pytest.mark.parametrize("period_index", [0, 1])

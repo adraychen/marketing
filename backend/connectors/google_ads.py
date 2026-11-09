@@ -20,7 +20,7 @@ CLIENTS = """select customer_client.client_customer, customer_client.descriptive
              customer_client.currency_code, customer_client.time_zone, customer_client.manager,
              customer_client.status from customer_client where customer_client.level = 1"""
 CAMPAIGNS = """select campaign.resource_name, campaign.id, campaign.name, campaign.status,
-               campaign.advertising_channel_type, campaign_budget.amount_micros,
+               campaign.advertising_channel_type, campaign.bidding_strategy_type, campaign_budget.amount_micros,
                campaign_budget.period from campaign"""
 GROUPS = "select ad_group.resource_name, ad_group.id, ad_group.name, ad_group.status, campaign.resource_name from ad_group"
 ADS = """select ad_group_ad.resource_name, ad_group_ad.status, ad_group_ad.ad_strength,
@@ -217,6 +217,7 @@ class GoogleAdsConnector(AdvertisingConnector):
             items.append(Resource(resource=c["resourceName"], data={
                 "id": c["id"], "name": c["name"], "status": c.get("status"),
                 "type": c.get("advertisingChannelType"),
+                "bidding_strategy": c.get("biddingStrategyType"),
                 "daily_budget": int(micros) / 1_000_000 if micros is not None else None,
             }))
         return items

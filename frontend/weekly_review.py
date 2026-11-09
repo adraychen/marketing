@@ -114,15 +114,29 @@ def show_weekly_review(account, route, latest_end, ai_available):
         st.caption("Google reports only some search terms. Their totals may differ from campaign totals.")
 
     if ai_available and ai_ready:
-        st.subheader("AI summary")
-        st.caption("Generate an interpretation using aggregate metrics and anonymized signals sent to Groq.")
-        key = f"review-ai:{route}:{end}"
-        if st.button("Generate AI summary"):
+        st.subheader("AI campaign analysis")
+        st.caption("Groq receives aggregate metrics and anonymized campaign evidence.")
+        focuses = {
+            "performance": "Interpret campaign performance",
+            "strategies": "Compare advertising strategies",
+            "decline": "Investigate declining results",
+            "optimization": "Recommend optimizations",
+        }
+        focus = st.selectbox("Analysis focus", list(focuses), format_func=focuses.get)
+        key = f"review-ai:{route}:{end}:{focus}"
+        if st.button("Generate AI analysis"):
             try:
                 with st.spinner("Summarizing the review…"):
                     st.session_state[key] = call(f"{route}/weekly-review/ai", "POST",
-                                                 params={"end": end.isoformat()}, timeout=60)["summary"]
+                                                 params={"end": end.isoformat(), "focus": focus}, timeout=60)
             except APIError as exc:
                 st.warning(str(exc))
         if key in st.session_state:
-            st.text(st.session_state[key])
+            result = st.session_state[key]
+            if result.get("model"):
+                st.caption(f"Groq · {result['model']}")
+            st.text(result["summary"])
+            if result.get("campaign_labels"):
+                with st.expander("Campaign names"):
+                    for alias, name in result["campaign_labels"].items():
+                        st.text(f"{alias} · {name}")
