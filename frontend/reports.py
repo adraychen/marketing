@@ -16,7 +16,10 @@ from backend.validation import validate
 from frontend.client import APIError, call
 from frontend.content_marketing import GA_LABELS, SOURCE_LABELS, grouped
 from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
-from frontend.visibility import facebook_changes, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review
+from frontend.visibility import (
+    facebook_changes, facebook_kind, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review,
+    source_status,
+)
 from frontend.views import coverage, metric_by_resource, period_rows
 
 INLINE_LIMIT = 200_000
@@ -284,13 +287,16 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     report.table("Published content catalog", items)
     sources = {row["source"]: row for row in catalog["sources"]}
     report.table("Content source status", [
-        {"source": source, "label": label, "status": sources.get(source, {}).get("status", "No sync recorded"),
+        {"source": source, "label": label, "status": source_status(sources.get(source)),
          "records": sources.get(source, {}).get("records"),
          "finished_at": sources.get(source, {}).get("finished_at"),
          "last_success_at": sources.get(source, {}).get("last_success_at"),
          "details": sources.get(source, {}).get("message")}
         for source, label in SOURCE_LABELS.items()
     ])
+    if sources.get("ga4") and not sources.get("ga4_traffic") and not sources.get("search_console_inspection"):
+        report.note("The GA4 traffic and URL Inspection jobs have no recorded attempts. Check the deployed "
+                    "content cron version and the visibility migration before interpreting these gaps.")
     daily, snapshots, post_links = [], [], []
     article_review, facebook_review = [], []
     search, queries, diagnostics, facebook, reels, intervals, coverage_rows = [], [], [], [], [], [], []
@@ -353,7 +359,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                                     "Check publication history, previews, and path reuse.")
             diagnostics.extend({**context, "observation": note} for note in observations)
         elif item["source"] == "facebook":
-            kind = metadata.get("content_type", "unknown")
+            kind = facebook_kind(item, metadata)
             facebook_review.append({
                 **review, "post_text": metadata.get("message"), "hashtags": metadata.get("hashtags"),
                 "destination_links": metadata.get("links"),
@@ -370,7 +376,8 @@ def add_content(report, route, catalog, campaign, params, terms=False):
             if not item_snapshots or latest["post_media_view"] is None:
                 diagnostics.append({**context, "observation": "Facebook media views are unavailable in the latest observation."})
             if kind == "reel" and latest["total_video_retention_graph"] is None:
-                diagnostics.append({**context, "observation": "Meta did not return a reel retention graph for the latest observation."})
+                state = latest["availability"]["total_video_retention_graph"]
+                diagnostics.append({**context, "observation": f"Reel retention is unavailable. {state}."})
         daily.extend({**context, **split_metrics(row)} for row in item_daily if terms or row["report"] != "gsc_query")
         snapshots.extend({**context, "period": "lifetime", **split_metrics(row)} for row in item_snapshots)
         post_links.extend({**context, **row} for row in details["links"])
@@ -397,7 +404,9 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     report.table("Facebook lifetime interval changes", intervals)
     report.note("Facebook interval changes compare observations for the same API version. Decreases may be corrections. "
                 "Intervals do not establish exact daily performance. Unique viewers are neither Page reach nor additive. "
-                "Reach, impressions, and paid or organic reach are unavailable from this import.")
+                "Reach, impressions, and paid or organic reach are unavailable from this import. "
+                "Check Meta Business Suite for account-visible reach and impressions. "
+                "Meta link clicks count only an explicit click category and do not establish outbound site visits.")
     report.table("Content data coverage", coverage_rows)
     report.table("Content visibility diagnostics", diagnostics)
     totals = []
@@ -425,6 +434,8 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     report.note("Search Console uses finalized data through a three-day sync lag. Page totals are separate from "
                 "visible queries, which can be anonymized or omitted by API row limits. GA4 daily active users "
                 "and new users are not summed across dates or traffic segments.")
+    report.note("GA4 traffic scope identifies views on the article and sessions that started there. "
+                "Those rows represent different populations and should be analyzed separately.")
     report.table("Shopify article traffic by source", [
         {**row, **json.loads(row["segment"]),
          "average_engagement_seconds_per_session": ratio(row.get("metric_userEngagementDuration"),

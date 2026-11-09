@@ -10,7 +10,10 @@ import streamlit as st
 from backend.metrics import ratio
 from frontend.client import call
 from frontend.views import table
-from frontend.visibility import facebook_changes, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review
+from frontend.visibility import (
+    facebook_changes, facebook_kind, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review,
+    source_status,
+)
 
 SOURCE_LABELS = {
     "shopify": "Shopify articles", "facebook": "Facebook posts", "ga4": "Google Analytics",
@@ -111,7 +114,8 @@ def show_article(item, details):
         ga_report("Facebook-tagged sessions", entries)
         st.text(" / ".join(utm.values()))
     st.caption("Purchases and revenue are measured for sessions that began on this article. Tagged reports can overlap.")
-    st.markdown("**Landing traffic by source and medium**")
+    st.markdown("**Article traffic by source and medium**")
+    st.caption("Article views and sessions that began on the article are shown as separate traffic scopes.")
     table([{"Date": row["day"], "Property": row["source_account"], **json.loads(row["segment"]), **row["metrics"],
             "Average engagement seconds per session": ratio(row["metrics"].get("userEngagementDuration"),
                                                              row["metrics"].get("sessions"))}
@@ -119,10 +123,10 @@ def show_article(item, details):
     search_report(daily)
 
 
-def show_facebook(details):
+def show_facebook(item, details):
     rows = details["snapshots"]
     metadata = details.get("metadata", {})
-    kind = metadata.get("content_type", "unknown")
+    kind = facebook_kind(item, metadata)
     st.caption(f"Facebook Page content · {kind}")
     if metadata.get("message"):
         st.text(metadata["message"])
@@ -183,7 +187,7 @@ def show_visibility_summary(route, items):
             articles.append({"source": "Coverage", "article": item["title"], "missing_analytics": not daily,
                              "indexing": (metadata.get("indexing") or {}).get("status", "Unavailable")})
         else:
-            kind = metadata.get("content_type", "unknown")
+            kind = facebook_kind(item, metadata)
             latest = facebook_latest(details["snapshots"], kind)
             facebook.append({"content": item["title"], "type": kind,
                              **{field: latest[field] for field in ("observed_at", "post_media_view",
@@ -219,7 +223,7 @@ def show_content_marketing(base):
     catalog = call(route)
     status = {item["source"]: item for item in catalog["sources"]}
     with st.expander("Source status", expanded=not catalog["items"]):
-        table([{"Source": label, "Status": status.get(key, {}).get("status", "No sync recorded"),
+        table([{"Source": label, "Status": source_status(status.get(key)),
                 "Last run": status.get(key, {}).get("finished_at"),
                 "Last success": status.get(key, {}).get("last_success_at"),
                 "Records": status.get(key, {}).get("records"), "Details": status.get(key, {}).get("message")}
@@ -268,7 +272,7 @@ def show_item_performance(route, items):
     if item["source"] == "shopify":
         show_article(item, details)
     else:
-        show_facebook(details)
+        show_facebook(item, details)
     if details["links"]:
         st.markdown("**Post links and campaign tags**")
         table([{"Article": row["article"], "Facebook post": row["post"], "Link": row["url"], **row["utm"]}

@@ -11,8 +11,8 @@ from psycopg2.extras import Json
 from backend import content_repository as repo
 from backend.config import MODE
 from backend.connectors.content import (
-    ContentError, analytics_reports, facebook_metrics, facebook_posts, inspect_article, search_article_url,
-    search_reports, shopify_articles, shopify_token,
+    ContentError, analytics_reports, facebook_metrics, facebook_posts, facebook_video_reference, inspect_article,
+    response_data, search_article_url, search_property_sample, search_reports, shopify_articles, shopify_token,
 )
 from backend.repositories import database
 
@@ -73,7 +73,7 @@ def report_items(client, org, source, source_account, shop, backfill_days, force
         articles = repo.read_items(cur, org, "shopify", shop)
     if not articles:
         return finish(org, source, "skipped", message="Discover published Shopify articles first.")
-    records, failures, first_error = 0, 0, None
+    records, failures, successful, first_error = 0, 0, 0, None
     for article in articles:
         try:
             with database() as cur:
@@ -100,12 +100,15 @@ def report_items(client, org, source, source_account, shop, backfill_days, force
             with database() as cur:
                 repo.write_daily(cur, org, article["id"], source_account, reports, start, end, rows)
             records += len(rows)
+            successful += 1
         except SOURCE_ERRORS as exc:
             failures += 1
             first_error = first_error or message(exc)
-    status = "succeeded" if not failures else "failed" if failures == len(articles) else "partial"
-    if source == "search_console" and status == "succeeded" and not records:
-        first_error = "No finalized page or query rows returned for the article URLs and dates requested."
+    status = "succeeded" if not failures else "partial" if successful else "failed"
+    if status == "succeeded" and not successful:
+        return finish(org, source, "skipped", message=f"Data not yet available. No eligible article dates through {end}.")
+    if status == "succeeded" and not records:
+        first_error = f"No matching rows for {successful} articles through {end} ({timezone})."
     return finish(org, source, status, records, first_error)
 
 
@@ -116,18 +119,21 @@ def article_indexing(client, org, site, shop):
         return
     with database() as cur:
         articles = repo.read_items(cur, org, "shopify", shop)
-    verified = 0
+    verified, unavailable = 0, set()
     for article in articles:
         result = inspect_article(client, site, article["url"])
         verified += result["status"] in ("Indexed", "Not indexed")
+        if result["status"] not in ("Indexed", "Not indexed"):
+            unavailable.add(result["status"])
         with database() as cur:
             cur.execute("""
                 update marketing_content_items
                 set data = jsonb_set(data, '{indexing}', %s, true)
                 where organization_id=%s and id=%s
             """, (Json(result), org, article["id"]))
-    status = "succeeded" if articles and verified == len(articles) else "partial" if verified else "skipped"
-    finish(org, source, status, verified, None if status == "succeeded" else "See per-article inspection availability.")
+    status = "skipped" if not articles else "succeeded" if not unavailable else "partial" if verified else "failed"
+    detail = ", ".join(sorted(unavailable)) if unavailable else "No articles discovered." if not articles else None
+    finish(org, source, status, verified, detail)
 
 
 def post_insights(client, org, page, token, version):
@@ -142,25 +148,103 @@ def post_insights(client, org, page, token, version):
     for post in posts:
         try:
             availability = {}
+            _, permalink_id = facebook_video_reference(post["url"])
             metrics = facebook_metrics(client, post["external_id"], token, version,
-                                       availability=availability, video_id=post["data"].get("video_id"))
-            if not metrics and any(state in {"Permission unavailable", "API request failure"}
-                                   for state in availability.values()):
+                                       availability=availability, video_id=post["data"].get("video_id") or permalink_id)
+            errors = {"Authentication failed", "Permission unavailable", "API request failure"} & set(availability.values())
+            if errors:
                 failures += 1
-                first_error = first_error or "Meta Insights access or requests failed for a post."
+                first_error = first_error or ", ".join(sorted(errors))
             with database() as cur:
                 repo.write_snapshot(cur, org, post["id"], today, version, {**metrics, "availability": availability})
-            records += 1
+            records += bool(metrics)
         except SOURCE_ERRORS as exc:
             failures += 1
             first_error = first_error or message(exc)
-    status = "succeeded" if not failures else "failed" if failures == len(posts) else "partial"
+    status = "succeeded" if not failures else "partial" if records else "failed"
+    if not failures and not records:
+        first_error = "No reportable Meta metrics returned. See per-metric availability."
     return finish(org, "facebook_insights", status, records, first_error)
+
+
+def diagnose(client, org, shop, page, token, version):
+    site = environment("CONTENT_GSC_SITE")
+    property_id = environment("CONTENT_GA4_PROPERTY_ID")
+    print("Content visibility diagnostics (read-only)", flush=True)
+    with database() as cur:
+        articles = repo.read_items(cur, org, "shopify", shop) if shop else []
+        posts = repo.read_items(cur, org, "facebook", page) if page else []
+        cur.execute("""
+            select exists (
+                select 1 from pg_constraint
+                where conrelid = 'public.marketing_content_daily_metrics'::regclass
+                  and pg_get_constraintdef(oid) like %s
+            ) as ready
+        """, ("%ga4_traffic%",))
+        print(f"Content visibility migration accepts GA4 traffic rows: {cur.fetchone()['ready']}", flush=True)
+    search_end = datetime.now(ZoneInfo("America/Los_Angeles")).date() - timedelta(days=3)
+    search_start = search_end - timedelta(days=89)
+    if site:
+        try:
+            sample = search_property_sample(client, site, search_start, search_end)
+            if sample:
+                print(f"Search Console property sample ({search_start} to {search_end}): "
+                      f"{sample['keys'][0]}, {sample['impressions']} impressions, {sample['clicks']} clicks")
+            else:
+                print(f"Search Console property sample ({search_start} to {search_end}): no finalized page rows")
+        except SOURCE_ERRORS as exc:
+            print(f"Search Console property sample: {message(exc)}")
+    else:
+        print("Search Console: property not configured.")
+    for article in articles:
+        url = article["url"]
+        if site:
+            inspection = inspect_article(client, site, url)
+            print(f"URL Inspection {url}: {inspection['status']} "
+                  f"(HTTP {inspection.get('http_status', 'not reported')})")
+            declared = search_article_url(site, url, article["data"].get("canonical_url"))
+            canonical = search_article_url(site, declared, inspection.get("googleCanonical"))
+            try:
+                rows = list(search_reports(client, site, canonical, search_start, search_end))
+                print(f"Search Analytics {canonical} through {search_end}: "
+                      f"{sum(row['report'] == 'gsc_page' for row in rows)} page rows, "
+                      f"{sum(row['report'] == 'gsc_query' for row in rows)} query rows")
+            except SOURCE_ERRORS as exc:
+                print(f"Search Analytics {canonical}: {message(exc)}")
+        if property_id.isascii() and property_id.isdecimal():
+            end = datetime.now(ZoneInfo(environment("CONTENT_GA4_TIMEZONE", "America/Toronto"))).date() - timedelta(days=1)
+            try:
+                rows = list(analytics_reports(client, property_id, url, end - timedelta(days=29), end, [],
+                                              kinds={"ga4_views", "ga4_traffic"}))
+                scopes = [row["report"] if not row["segment"] else row["segment"] for row in rows]
+                print(f"GA4 {url}: {scopes.count('ga4_views')} daily readership rows, "
+                      f"{sum('article_views' in scope for scope in scopes)} page-view source rows, "
+                      f"{sum('landing_sessions' in scope for scope in scopes)} landing-session source rows")
+            except SOURCE_ERRORS as exc:
+                print(f"GA4 {url}: {message(exc)}")
+    if page and token:
+        try:
+            identity = response_data(client.get(f"https://graph.facebook.com/{version}/me",
+                                               headers={"Authorization": f"Bearer {token}"}, params={"fields": "id"}))
+            print(f"Facebook token resolves to configured Page: {identity.get('id') == page}")
+        except SOURCE_ERRORS as exc:
+            print(f"Facebook Page identity check: {message(exc)}")
+        for post in posts:
+            kind, permalink_id = facebook_video_reference(post["url"])
+            availability = {}
+            metrics = facebook_metrics(client, post["external_id"], token, version, availability=availability,
+                                       video_id=post["data"].get("video_id") or permalink_id)
+            print(f"Facebook {post['external_id']} ({kind or post['data'].get('content_type', 'unknown')}): "
+                  f"returned {', '.join(sorted(metrics)) or 'no metrics'}; availability {availability}")
+    else:
+        print("Facebook: Page ID or token not configured.")
+    return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description="Discover and refresh content marketing data.")
     parser.add_argument("--backfill", action="store_true", help="Refresh the entire configured lookback window.")
+    parser.add_argument("--diagnose", action="store_true", help="Probe configured content sources without writing data.")
     args = parser.parse_args()
     try:
         org = str(UUID(environment("CONTENT_ORGANIZATION_ID")))
@@ -195,6 +279,9 @@ def main():
     shop_client_id = environment("CONTENT_SHOPIFY_CLIENT_ID")
     shop_client_secret = environment("CONTENT_SHOPIFY_CLIENT_SECRET")
     meta_token = environment("CONTENT_META_PAGE_ACCESS_TOKEN")
+    if args.diagnose:
+        with httpx.Client(timeout=30, follow_redirects=False) as client:
+            return diagnose(client, org, shop, page, meta_token, version)
     with database() as lock, httpx.Client(timeout=30, follow_redirects=False) as client:
         lock.execute("select pg_try_advisory_xact_lock(hashtextextended(%s, 0)) as acquired", (f"content:{org}",))
         if not lock.fetchone()["acquired"]:

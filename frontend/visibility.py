@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from backend.connectors.content import facebook_video_reference
 from backend.metrics import ratio
 
 VIDEO_FIELDS = ("total_video_views", "total_video_view_total_time", "total_video_avg_time_watched",
@@ -9,6 +10,19 @@ VIDEO_FIELDS = ("total_video_views", "total_video_view_total_time", "total_video
 POST_FIELDS = ("post_media_view", "post_total_media_view_unique", "post_clicks",
                "reactions", "comments", "shares", "link_clicks")
 CUMULATIVE_FIELDS = ("post_media_view", "post_clicks", "total_video_views", "total_video_view_total_time")
+
+
+def source_status(run):
+    if not run:
+        return "No sync recorded"
+    if run["status"] == "succeeded":
+        return "Succeeded with data" if run.get("records") else "Succeeded with no matching records"
+    return run["status"]
+
+
+def facebook_kind(item, metadata):
+    permalink_type, _ = facebook_video_reference(item.get("url"))
+    return permalink_type or metadata.get("content_type") or "unknown"
 
 
 def search_totals(rows):
@@ -83,15 +97,20 @@ def facebook_latest(snapshots, kind):
     clicks = metrics.get("post_clicks_by_type")
     if isinstance(clicks, dict):
         values["link_clicks"] = next((value for label, value in clicks.items()
-                                     if label.strip().casefold() == "link clicks"), None)
+                                     if label.strip().casefold().replace("_", " ") in {"link click", "link clicks"}
+                                     and isinstance(value, (int, float)) and not isinstance(value, bool)), None)
     engagement = [values[key] for key in ("reactions", "comments", "shares")]
     views = values["post_media_view"]
     engagement_rate = ratio(sum(engagement), views) if all(isinstance(value, (int, float)) for value in engagement) \
         and isinstance(views, (int, float)) else None
     availability = {
-        key: "Reported" if values[key] is not None else states.get(key, "Unavailable")
+        key: "Reported" if values[key] is not None else states.get(key, "Availability not recorded")
         for key in fields
     }
+    if values["link_clicks"] is None:
+        availability["link_clicks"] = states.get("post_clicks_by_type", "Click breakdown availability not recorded")
+        if availability["link_clicks"] == "Reported" or isinstance(clicks, dict):
+            availability["link_clicks"] = "No link-click category returned"
     if latest is None:
         availability = {key: "No snapshot in selected range" for key in fields}
     return {"observed_at": latest["observed_at"] if latest else None,

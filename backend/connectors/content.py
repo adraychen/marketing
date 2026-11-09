@@ -21,11 +21,22 @@ class ContentError(Exception):
 
 def response_data(response):
     if not response.is_success:
+        if response.status_code == 401:
+            raise ContentError("Authentication failed (HTTP 401). Check the existing credential.")
+        if response.status_code == 403:
+            raise ContentError("Access denied (HTTP 403). Check API enablement and account or property access.")
         raise ContentError(f"Source returned HTTP {response.status_code}. Check its access and configuration.")
     return response.json()
 
 
 def analytics_response(response):
+    if response.status_code == 400:
+        try:
+            error = response.json().get("error", {})
+            if error.get("status") == "INVALID_ARGUMENT":
+                raise ContentError("GA4 rejected the report dimensions, metrics, or filters (INVALID_ARGUMENT).")
+        except (ValueError, AttributeError, TypeError):
+            pass
     if response.status_code == 403:
         try:
             error = response.json()["error"]
@@ -174,6 +185,8 @@ def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None)
             filters.append(("sessionManualAdContent", utm["utm_content"]))
         reports.append(("ga4_facebook", "landingPage", landing, filters, json.dumps(utm, sort_keys=True), ()))
     reports.append(("ga4_traffic", "landingPage", acquisition, [], "", traffic_dimensions))
+    reports.append(("ga4_traffic", "pagePath", ("screenPageViews", "activeUsers", "userEngagementDuration"),
+                    [], "", ("pagePath", *traffic_dimensions[1:])))
     for kind, dimension, metrics, extra, segment, breakdown in reports:
         if kinds is not None and kind not in kinds:
             continue
@@ -201,7 +214,10 @@ def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None)
                 day_value, *dimensions = [value["value"] for value in row["dimensionValues"]]
                 day = datetime.strptime(day_value, "%Y%m%d").date()
                 values = {key: float(item["value"]) for key, item in zip(metrics, row["metricValues"], strict=True)}
-                key = json.dumps(dict(zip(breakdown, dimensions, strict=True)), sort_keys=True) if breakdown else segment
+                values_by_dimension = dict(zip(breakdown, dimensions, strict=True))
+                if breakdown:
+                    values_by_dimension["traffic_scope"] = "article_views" if dimension == "pagePath" else "landing_sessions"
+                key = json.dumps(values_by_dimension, sort_keys=True) if breakdown else segment
                 yield metric_row(kind, day, metadata["timeZone"], values,
                                  currency=metadata.get("currencyCode"), segment=key)
             offset = int(request["offset"]) + len(rows)
@@ -240,7 +256,15 @@ def inspect_article(client, site, url):
         response = client.post(endpoint, headers=google_headers(endpoint, "webmasters.readonly"),
                                json={"siteUrl": site, "inspectionUrl": url, "languageCode": "en"})
         if not response.is_success:
-            status = "Permission unavailable" if response.status_code in (401, 403) else "API request failure"
+            status = {401: "Authentication failed", 403: "Permission unavailable"}.get(
+                response.status_code, "API request failure")
+            if response.status_code == 403:
+                try:
+                    details = response.json().get("error", {}).get("details", [])
+                    if any(detail.get("reason") == "SERVICE_DISABLED" for detail in details):
+                        status = "Search Console API disabled in the credential project"
+                except (ValueError, AttributeError, TypeError):
+                    pass
             return {**result, "status": status, "http_status": response.status_code}
         inspection = response.json()["inspectionResult"]
         fields = inspection.get("indexStatusResult", {})
@@ -262,7 +286,7 @@ def search_reports(client, site, url, start, end):
         while True:
             result = response_data(client.post(endpoint, headers=headers, json={
                 "startDate": start.isoformat(), "endDate": end.isoformat(), "type": "web",
-                "dataState": "final", "aggregationType": "byPage", "dimensions": dimensions,
+                "dataState": "final", "aggregationType": "auto", "dimensions": dimensions,
                 "dimensionFilterGroups": [{"filters": [{"dimension": "page", "operator": "equals",
                                                         "expression": url}]}],
                 "rowLimit": 25000, "startRow": offset,
@@ -275,6 +299,15 @@ def search_reports(client, site, url, start, end):
             if len(rows) < 25000:
                 break
             offset += len(rows)
+
+
+def search_property_sample(client, site, start, end):
+    endpoint = f"https://www.googleapis.com/webmasters/v3/sites/{quote(site, safe='')}/searchAnalytics/query"
+    data = response_data(client.post(endpoint, headers=google_headers(endpoint, "webmasters.readonly"), json={
+        "startDate": start.isoformat(), "endDate": end.isoformat(), "type": "web", "dataState": "final",
+        "dimensions": ["page"], "aggregationType": "auto", "rowLimit": 1,
+    }))
+    return next(iter(data.get("rows", [])), None)
 
 
 def destination(url):
@@ -300,6 +333,19 @@ def post_hashtags(message):
     return list(tags.values())
 
 
+def facebook_video_reference(url):
+    parsed = urlsplit(destination(url) or "")
+    if parsed.hostname not in {"facebook.com", "www.facebook.com", "m.facebook.com"}:
+        return None, None
+    match = re.search(r"/(reel|reels|videos)/(\d+)(?:/|$)", parsed.path)
+    if match:
+        return ("reel" if match[1] in {"reel", "reels"} else "video"), match[2]
+    video_id = parse_qs(parsed.query).get("v", [""])[0]
+    if parsed.path in ("/watch", "/watch/", "/video.php") and re.fullmatch(r"[0-9]+", video_id):
+        return "video", video_id
+    return None, None
+
+
 def facebook_posts(client, page, token, version):
     endpoint = f"https://graph.facebook.com/{version}/{page}/published_posts"
     headers = {"Authorization": f"Bearer {token}"}
@@ -323,9 +369,13 @@ def facebook_posts(client, page, token, version):
             first = next(iter(attachments), {})
             permalink = destination(post.get("permalink_url"))
             attachment_type = (first.get("media_type") or first.get("type") or "").lower()
-            attachment_path = urlsplit(destination(first.get("url")) or "").path
-            if "/reel/" in urlsplit(permalink or "").path or "/reel/" in attachment_path:
-                kind = "reel"
+            reference_kind, video_id = facebook_video_reference(permalink)
+            if not reference_kind:
+                reference_kind, video_id = facebook_video_reference(first.get("url"))
+            if not reference_kind:
+                reference_kind, video_id = facebook_video_reference((first.get("target") or {}).get("url"))
+            if reference_kind:
+                kind = reference_kind
             elif "video" in attachment_type:
                 kind = "video"
             elif attachment_type in {"photo", "image", "album"}:
@@ -339,7 +389,7 @@ def facebook_posts(client, page, token, version):
                    "url": permalink, "published_at": post["created_time"],
                    "data": {"links": sorted(links), "message": message, "hashtags": post_hashtags(message),
                             "content_type": kind,
-                            "video_id": target_id if kind in {"reel", "video"} and target_id.isdecimal() else None,
+                            "video_id": video_id or (target_id if kind in {"reel", "video"} and target_id.isdecimal() else None),
                             "media_reference": destination(((first.get("media") or {}).get("image") or {}).get("src"))}}
         paging = body.get("paging", {})
         if not paging.get("next"):
@@ -361,10 +411,13 @@ def facebook_metrics(client, post, token, version, *, availability=None, video_i
             return {}
         if not response.is_success or body.get("error"):
             code = body.get("error", {}).get("code")
-            if response.status_code in (401, 403) or code in (10, 190, 200):
+            if response.status_code == 401 or code == 190:
+                states[key] = "Authentication failed"
+            elif response.status_code == 403 or code in (10, 200):
                 states[key] = "Permission unavailable"
             elif code == 100:
-                states[key] = "Unsupported or inaccessible for this content"
+                text = str(body.get("error", {}).get("message", "")).lower()
+                states[key] = "Unsupported metric" if "metric" in text else "Unsupported or inaccessible for this content"
             else:
                 states[key] = "API request failure"
             return {}

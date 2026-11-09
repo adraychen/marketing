@@ -10,7 +10,9 @@ from psycopg2.extras import RealDictCursor
 
 from backend import content_repository as repo
 from backend.connectors import content
-from frontend.visibility import facebook_changes, facebook_latest, prepublication_rows, search_queries, search_totals
+from frontend.visibility import (
+    facebook_changes, facebook_kind, facebook_latest, prepublication_rows, search_queries, search_totals, source_status,
+)
 
 DAY = date(2026, 11, 6)
 ARTICLE = "https://okoostore.com/blogs/journal/citizen-eco-drive-vs-automatic"
@@ -43,7 +45,7 @@ def test_ga4_requests_separate_page_landing_and_facebook_reports(monkeypatch):
 
     with httpx.Client(transport=httpx.MockTransport(respond)) as client:
         rows = list(content.analytics_reports(client, "123", ARTICLE, DAY, DAY, [repo.link_utm(TAGGED)]))
-    assert [row["report"] for row in rows] == ["ga4_views", "ga4_landing", "ga4_facebook", "ga4_traffic"]
+    assert [row["report"] for row in rows] == ["ga4_views", "ga4_landing", "ga4_facebook", "ga4_traffic", "ga4_traffic"]
     assert requests[0]["dimensionFilter"]["filter"]["fieldName"] == "pagePath"
     filters = requests[2]["dimensionFilter"]["andGroup"]["expressions"]
     assert [item["filter"]["fieldName"] for item in filters] == [
@@ -52,6 +54,9 @@ def test_ga4_requests_separate_page_landing_and_facebook_reports(monkeypatch):
     assert rows[2]["currency"] == "CAD"
     assert json.loads(rows[2]["segment"]) == repo.PILOT_UTM
     assert json.loads(rows[3]["segment"])["sessionMedium"] == "sessionMedium"
+    assert json.loads(rows[3]["segment"])["traffic_scope"] == "landing_sessions"
+    assert json.loads(rows[4]["segment"])["traffic_scope"] == "article_views"
+    assert set(rows[4]["metrics"]) == {"screenPageViews", "activeUsers", "userEngagementDuration"}
 
 
 def test_ga4_thresholded_results_fail_before_replacing_data(monkeypatch):
@@ -123,6 +128,35 @@ def test_url_inspection_permission_and_indexing(monkeypatch):
     with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))) as client:
         result = content.inspect_article(client, "https://okoostore.com/", ARTICLE)
     assert result["status"] == "Indexed" and result["googleCanonical"] == ARTICLE
+
+
+def test_search_property_probe_requests_finalized_page_sample(monkeypatch):
+    monkeypatch.setattr(content, "google_headers", lambda *_args: {})
+    def respond(request):
+        query = json.loads(request.content)
+        assert query["dataState"] == "final" and query["dimensions"] == ["page"]
+        assert "dimensionFilterGroups" not in query
+        return httpx.Response(200, json={"rows": [{"keys": [ARTICLE], "impressions": 1, "clicks": 0}]})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        assert content.search_property_sample(client, "https://okoostore.com/", DAY, DAY)["impressions"] == 1
+
+
+def test_saved_reel_permalink_resolves_video_id_and_legacy_type():
+    url = "https://www.facebook.com/reel/1150268357456137/"
+    assert content.facebook_video_reference(url) == ("reel", "1150268357456137")
+    assert facebook_kind({"url": url}, {"content_type": "unknown"}) == "reel"
+    assert content.facebook_video_reference("https://example.com/reel/123/") == (None, None)
+
+
+def test_facebook_link_clicks_are_distinct_from_total_and_show_valid_zero():
+    snapshot = {"api_version": "v26.0", "observed_at": "2026-11-07T00:00:00Z",
+                "metrics": {"post_clicks": 7, "post_clicks_by_type": {"other clicks": 7}}}
+    row = facebook_latest([snapshot], "link")
+    assert row["link_clicks"] is None and row["post_clicks"] == 7
+    assert row["availability"]["link_clicks"] == "No link-click category returned"
+    snapshot["metrics"]["post_clicks_by_type"]["link_click"] = 0
+    assert facebook_latest([snapshot], "link")["link_clicks"] == 0
+    assert source_status({"status": "succeeded", "records": 0}) == "Succeeded with no matching records"
 
 
 def test_prepublication_uses_ga4_reporting_timezone():
