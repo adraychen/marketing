@@ -20,7 +20,8 @@ from frontend.views import coverage, metric_by_resource, period_rows
 INLINE_LIMIT = 200_000
 FOCUSES = ("performance", "strategies", "decline", "optimization")
 ARCHIVE_SUMMARIES = {"Report scope", "Google Ads coverage", "Google Ads overview", "Weekly review scope",
-                     "Weekly review totals", "Content source status"}
+                     "Weekly review totals", "Content source status", "Marketing planning context",
+                     "Google Ads budget and bidding"}
 
 
 def cell(value):
@@ -122,9 +123,21 @@ def draft_row(row):
     return {**row, "validation_issues": issues}
 
 
+def campaign_settings(campaigns, currency):
+    return [
+        {"campaign": row["data"]["name"], "status": row["data"].get("status"),
+         "daily_budget": row["data"].get("daily_budget"), "currency": currency,
+         "bidding_strategy": row["data"].get("bidding_strategy")}
+        for row in campaigns
+    ]
+
+
 def add_ads(report, account, route, params, start, end, week_end, terms, drafts):
     snapshot = call(f"{route}/report", params=params)
     currency = account["currency"]
+    report.note("Campaign budgets and bidding strategies reflect the latest Google Ads import. "
+                "A daily budget may be shared across campaigns, so do not sum the campaign budgets.")
+    report.table("Google Ads budget and bidding", campaign_settings(snapshot["campaigns"], currency))
     prior_start, prior_end = previous_period(start, end)
     complete = coverage(account, start, end)
     comparable = coverage(account, prior_start, end)
@@ -284,9 +297,30 @@ def show_reports(org, base, account, mode):
                              min_value=date(2000, 1, 14), max_value=last) if account else None
     terms = st.checkbox("Include Google Ads search terms and Search Console queries")
     drafts = st.checkbox("Include saved ad drafts", disabled=account is None)
+    with st.expander("Marketing planning context", expanded=True):
+        st.caption("Campaign budgets and bidding strategies come from the latest Google Ads import. "
+                   "Enter the business context you want to share with this report.")
+        budget = st.number_input(
+            f"Planned daily Google Ads budget ({account['currency']})" if account else "Planned daily Google Ads budget",
+            min_value=0.0, value=None, step=1.0, disabled=account is None,
+            key=f"report-budget:{org['id']}:{account['id'] if account else ''}",
+        )
+        objective = st.text_area("Main marketing objective for the next 30 days", key=f"report-objective:{org['id']}")
+        orders = st.selectbox("Has Okoo received any Shopify orders?", ("Unknown", "Yes", "No"),
+                              key=f"report-orders:{org['id']}")
+        activated = st.date_input("Citizen Collection campaign activation date", value=None, max_value=today,
+                                  key=f"report-activation:{org['id']}")
+    planning = {
+        "planned_daily_google_ads_budget": budget,
+        "budget_currency": account["currency"] if account and budget is not None else None,
+        "next_30_days_objective": objective.strip() or "Not provided",
+        "shopify_store_has_received_orders": orders,
+        "citizen_collection_campaign_activated_on": activated.isoformat() if activated else "Not provided",
+        "source": "Entered by report creator",
+    }
     st.caption("Includes performance totals, daily rows, Weekly Review, content links, and sync status. "
                "Existing AI results for the selected week are included when available in this session.")
-    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts)
+    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts, planning)
     if st.button("Generate report", type="primary"):
         st.session_state.pop("generated-report", None)
         with st.spinner("Preparing report…"):
@@ -298,6 +332,7 @@ def show_reports(org, base, account, mode):
                 "start": start.isoformat(), "end": end.isoformat(),
                 "includes_search_terms": terms, "includes_saved_drafts": drafts,
             }])
+            report.table("Marketing planning context", [planning])
             params = {"start": start.isoformat(), "end": end.isoformat()}
             if account:
                 add_ads(report, account, f"{base}/accounts/{account['id']}", params, start, end,
