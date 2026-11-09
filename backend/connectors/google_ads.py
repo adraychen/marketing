@@ -20,9 +20,12 @@ CLIENTS = """select customer_client.client_customer, customer_client.descriptive
              customer_client.currency_code, customer_client.time_zone, customer_client.manager,
              customer_client.status from customer_client where customer_client.level = 1"""
 CAMPAIGNS = """select campaign.resource_name, campaign.id, campaign.name, campaign.status,
-               campaign.advertising_channel_type, campaign.bidding_strategy_type, campaign_budget.amount_micros,
-               campaign_budget.period from campaign"""
-GROUPS = "select ad_group.resource_name, ad_group.id, ad_group.name, ad_group.status, campaign.resource_name from ad_group"
+               campaign.advertising_channel_type, campaign.bidding_strategy_type, campaign.bidding_strategy,
+               campaign.target_spend.cpc_bid_ceiling_micros, campaign_budget.amount_micros,
+               campaign_budget.total_amount_micros, campaign_budget.resource_name,
+               campaign_budget.explicitly_shared, campaign_budget.period from campaign"""
+GROUPS = """select ad_group.resource_name, ad_group.id, ad_group.name, ad_group.status,
+            ad_group.cpc_bid_micros, campaign.resource_name from ad_group"""
 ADS = """select ad_group_ad.resource_name, ad_group_ad.status, ad_group_ad.ad_strength,
          ad_group.resource_name, ad_group_ad.ad.id, ad_group_ad.ad.type,
          ad_group_ad.ad.name, ad_group_ad.ad.final_urls,
@@ -34,13 +37,17 @@ ADS = """select ad_group_ad.resource_name, ad_group_ad.status, ad_group_ad.ad_st
          ad_group_ad.ad.expanded_text_ad.path1, ad_group_ad.ad.expanded_text_ad.path2
          from ad_group_ad"""
 KEYWORDS = """select ad_group_criterion.resource_name, ad_group_criterion.status,
-              ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type,
+              ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.cpc_bid_micros,
               ad_group.resource_name from ad_group_criterion
               where ad_group_criterion.type = KEYWORD and ad_group_criterion.negative = false"""
 
 
 class GoogleAdsError(Exception):
     pass
+
+
+def money_from_micros(value):
+    return int(value) / 1_000_000 if value is not None else None
 
 
 ACCESS_HINTS = {
@@ -213,25 +220,36 @@ class GoogleAdsConnector(AdvertisingConnector):
         items = []
         for row in self.rows(account, CAMPAIGNS):
             c, budget = row["campaign"], row.get("campaignBudget", {})
-            micros = budget.get("amountMicros") if budget.get("period") == "DAILY" else None
+            period = budget.get("period")
+            if not period and "amountMicros" in budget:
+                period = "DAILY"
+            ceiling = c.get("targetSpend", {}).get("cpcBidCeilingMicros")
             items.append(Resource(resource=c["resourceName"], data={
                 "id": c["id"], "name": c["name"], "status": c.get("status"),
                 "type": c.get("advertisingChannelType"),
                 "bidding_strategy": c.get("biddingStrategyType"),
-                "daily_budget": int(micros) / 1_000_000 if micros is not None else None,
+                "daily_budget": money_from_micros(budget.get("amountMicros")) if period == "DAILY" else None,
+                "total_budget": money_from_micros(budget.get("totalAmountMicros")),
+                "budget_period": period,
+                "budget_resource": budget.get("resourceName"),
+                "shared_budget": budget.get("explicitlyShared"),
+                "portfolio_strategy": c.get("biddingStrategy"),
+                "max_cpc_ceiling": money_from_micros(ceiling) if ceiling and int(ceiling) > 0 else None,
             }))
         return items
 
     def content(self, account):
         groups = [
             Resource(resource=row["adGroup"]["resourceName"], parent=row["campaign"]["resourceName"],
-                     data={key: row["adGroup"].get(key) for key in ("id", "name", "status")})
+                     data={**{key: row["adGroup"].get(key) for key in ("id", "name", "status")},
+                           "configured_cpc_bid": money_from_micros(row["adGroup"].get("cpcBidMicros"))})
             for row in self.rows(account, GROUPS)
         ]
         keywords = [
             Resource(resource=item["resourceName"], parent=row["adGroup"]["resourceName"], data={
                 "text": item["keyword"]["text"], "match_type": item["keyword"].get("matchType"),
                 "status": item.get("status"),
+                "configured_cpc_bid": money_from_micros(item.get("cpcBidMicros")),
             })
             for row in self.rows(account, KEYWORDS) for item in [row["adGroupCriterion"]]
         ]

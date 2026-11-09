@@ -127,7 +127,8 @@ def campaign_settings(campaigns, currency):
     return [
         {"campaign": row["data"].get("name") or row["resource"], "status": row["data"].get("status"),
          "daily_budget": row["data"].get("daily_budget"), "currency": currency,
-         "bidding_strategy": row["data"].get("bidding_strategy")}
+         **{key: row["data"].get(key) for key in ("budget_period", "total_budget", "budget_resource",
+              "shared_budget", "bidding_strategy", "portfolio_strategy", "max_cpc_ceiling")}}
         for row in campaigns
     ]
 
@@ -135,10 +136,14 @@ def campaign_settings(campaigns, currency):
 def fact_checks(settings, first_activity=None):
     rows = []
     for fact, field, check in (
-        ("Google Ads daily budget per campaign", "daily_budget", "Check the campaign budget and its period in Google Ads."),
+        ("Google Ads budget per campaign", "daily_budget", "Check the campaign budget and its period in Google Ads."),
         ("Google Ads bidding strategy per campaign", "bidding_strategy", "Check bidding settings or refresh the Google Ads sync."),
     ):
-        count = sum(row[field] not in (None, "", "UNKNOWN", "UNSPECIFIED") for row in settings)
+        count = sum(
+            row[field] not in (None, "", "UNKNOWN", "UNSPECIFIED")
+            or (field == "daily_budget" and row["total_budget"] is not None)
+            for row in settings
+        )
         status = "Verified from latest import" if count and count == len(settings) else (
             "Partially verified" if count else "Needs verification"
         )
@@ -163,9 +168,13 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
     snapshot = call(f"{route}/report", params=params)
     currency = account["currency"]
     report.note("Campaign budgets and bidding strategies reflect the latest Google Ads import. "
-                "A daily budget may be shared across campaigns, so do not sum the campaign budgets.")
+                "Match shared budgets by budget resource. A campaign total budget covers the campaign duration. "
+                "Daily budgets are average daily amounts. Do not sum shared budgets.")
     settings = campaign_settings(snapshot["campaigns"], currency)
     report.table("Google Ads budget and bidding", settings)
+    report.note("The Maximize Clicks ceiling is the campaign-level cap when returned by Google Ads. "
+                "Configured manual CPC bids are in the ad group and keyword tables. A missing ceiling does not "
+                "establish a cap of zero. Portfolio strategy caps are not available from this import.")
     matches = [row["resource"] for row in snapshot["campaigns"]
                if (row["data"].get("name") or "").strip().casefold() == "citizen collection"]
     first_activity = None
@@ -175,7 +184,17 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
              if row["resource"] == matches[0] and (row["impressions"] or row["clicks"] or row["spend"])),
             default=None,
         )
-    report.table("Marketing fact verification", fact_checks(settings, first_activity))
+    checks = fact_checks(settings, first_activity)
+    missing_caps = [
+        row["campaign"] for row in settings
+        if row["bidding_strategy"] in ("TARGET_SPEND", "MAXIMIZE_CLICKS", None, "", "UNKNOWN", "UNSPECIFIED")
+        and row["max_cpc_ceiling"] is None
+    ]
+    if missing_caps:
+        checks.append({"fact": "Google Ads maximum CPC ceiling", "status": "Needs verification",
+                       "evidence": {"campaigns_without_verified_ceiling": missing_caps},
+                       "follow_up": "Check whether a cap is set in the campaign or portfolio bidding settings."})
+    report.table("Marketing fact verification", checks)
     prior_start, prior_end = previous_period(start, end)
     complete = coverage(account, start, end)
     comparable = coverage(account, prior_start, end)
