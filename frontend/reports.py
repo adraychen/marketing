@@ -20,7 +20,7 @@ from frontend.views import coverage, metric_by_resource, period_rows
 INLINE_LIMIT = 200_000
 FOCUSES = ("performance", "strategies", "decline", "optimization")
 ARCHIVE_SUMMARIES = {"Report scope", "Google Ads coverage", "Google Ads overview", "Weekly review scope",
-                     "Weekly review totals", "Content source status", "Marketing planning context",
+                     "Weekly review totals", "Content source status", "Marketing fact verification",
                      "Google Ads budget and bidding"}
 
 
@@ -125,11 +125,38 @@ def draft_row(row):
 
 def campaign_settings(campaigns, currency):
     return [
-        {"campaign": row["data"]["name"], "status": row["data"].get("status"),
+        {"campaign": row["data"].get("name") or row["resource"], "status": row["data"].get("status"),
          "daily_budget": row["data"].get("daily_budget"), "currency": currency,
          "bidding_strategy": row["data"].get("bidding_strategy")}
         for row in campaigns
     ]
+
+
+def fact_checks(settings, first_activity=None):
+    rows = []
+    for fact, field, check in (
+        ("Google Ads daily budget per campaign", "daily_budget", "Check the campaign budget and its period in Google Ads."),
+        ("Google Ads bidding strategy per campaign", "bidding_strategy", "Check bidding settings or refresh the Google Ads sync."),
+    ):
+        count = sum(row[field] not in (None, "", "UNKNOWN", "UNSPECIFIED") for row in settings)
+        status = "Verified from latest import" if count and count == len(settings) else (
+            "Partially verified" if count else "Needs verification"
+        )
+        rows.append({"fact": fact, "status": status, "evidence": f"{count} of {len(settings)} imported campaigns",
+                     "follow_up": check if not count or count < len(settings) else None})
+    rows.extend([
+        {"fact": "Main marketing objective for the next 30 days", "status": "Needs verification",
+         "evidence": "The dashboard has no connected source for marketing objectives.",
+         "follow_up": "Identify the current approved marketing plan or goal."},
+        {"fact": "Has Okoo received any Shopify orders?", "status": "Needs verification",
+         "evidence": "The Shopify sync imports articles. GA4 article-attributed purchases do not establish storewide order history.",
+         "follow_up": "Check Shopify Orders or connect a source with read access and sufficient order history."},
+        {"fact": "Citizen Collection campaign activation date", "status": "Needs verification",
+         "evidence": (f"First recorded activity in the selected period was {first_activity}. Activation date is unverified."
+                      if first_activity else "The Google Ads import does not include campaign activation history."),
+         "follow_up": "Confirm the exact campaign and check when it was enabled in Google Ads change history."},
+    ])
+    return rows
 
 
 def add_ads(report, account, route, params, start, end, week_end, terms, drafts):
@@ -137,7 +164,18 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
     currency = account["currency"]
     report.note("Campaign budgets and bidding strategies reflect the latest Google Ads import. "
                 "A daily budget may be shared across campaigns, so do not sum the campaign budgets.")
-    report.table("Google Ads budget and bidding", campaign_settings(snapshot["campaigns"], currency))
+    settings = campaign_settings(snapshot["campaigns"], currency)
+    report.table("Google Ads budget and bidding", settings)
+    matches = [row["resource"] for row in snapshot["campaigns"]
+               if (row["data"].get("name") or "").strip().casefold() == "citizen collection"]
+    first_activity = None
+    if len(matches) == 1:
+        first_activity = min(
+            (row["day"] for row in period_rows(snapshot, "campaigns", start, end)
+             if row["resource"] == matches[0] and (row["impressions"] or row["clicks"] or row["spend"])),
+            default=None,
+        )
+    report.table("Marketing fact verification", fact_checks(settings, first_activity))
     prior_start, prior_end = previous_period(start, end)
     complete = coverage(account, start, end)
     comparable = coverage(account, prior_start, end)
@@ -297,30 +335,9 @@ def show_reports(org, base, account, mode):
                              min_value=date(2000, 1, 14), max_value=last) if account else None
     terms = st.checkbox("Include Google Ads search terms and Search Console queries")
     drafts = st.checkbox("Include saved ad drafts", disabled=account is None)
-    with st.expander("Marketing planning context", expanded=True):
-        st.caption("Campaign budgets and bidding strategies come from the latest Google Ads import. "
-                   "Enter the business context you want to share with this report.")
-        budget = st.number_input(
-            f"Planned daily Google Ads budget ({account['currency']})" if account else "Planned daily Google Ads budget",
-            min_value=0.0, value=None, step=1.0, disabled=account is None,
-            key=f"report-budget:{org['id']}:{account['id'] if account else ''}",
-        )
-        objective = st.text_area("Main marketing objective for the next 30 days", key=f"report-objective:{org['id']}")
-        orders = st.selectbox("Has Okoo received any Shopify orders?", ("Unknown", "Yes", "No"),
-                              key=f"report-orders:{org['id']}")
-        activated = st.date_input("Citizen Collection campaign activation date", value=None, max_value=today,
-                                  key=f"report-activation:{org['id']}")
-    planning = {
-        "planned_daily_google_ads_budget": budget,
-        "budget_currency": account["currency"] if account and budget is not None else None,
-        "next_30_days_objective": objective.strip() or "Not provided",
-        "shopify_store_has_received_orders": orders,
-        "citizen_collection_campaign_activated_on": activated.isoformat() if activated else "Not provided",
-        "source": "Entered by report creator",
-    }
     st.caption("Includes performance totals, daily rows, Weekly Review, content links, and sync status. "
                "Existing AI results for the selected week are included when available in this session.")
-    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts, planning)
+    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts)
     if st.button("Generate report", type="primary"):
         st.session_state.pop("generated-report", None)
         with st.spinner("Preparing report…"):
@@ -332,13 +349,13 @@ def show_reports(org, base, account, mode):
                 "start": start.isoformat(), "end": end.isoformat(),
                 "includes_search_terms": terms, "includes_saved_drafts": drafts,
             }])
-            report.table("Marketing planning context", [planning])
             params = {"start": start.isoformat(), "end": end.isoformat()}
             if account:
                 add_ads(report, account, f"{base}/accounts/{account['id']}", params, start, end,
                         week_end, terms, drafts)
             else:
                 report.note("No Google Ads account is connected.")
+                report.table("Marketing fact verification", fact_checks([]))
             add_content(report, content_route, catalog, campaign, params, terms)
             contents = [{"Section": name, "Rows": len(rows)} for name, rows in report.sections if name]
             st.session_state["generated-report"] = scope, report.export(), contents
