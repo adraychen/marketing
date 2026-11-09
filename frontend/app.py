@@ -14,6 +14,7 @@ if project_root not in sys.path:
 from frontend.client import APIError, call, clear_session, store_session
 from frontend.content_marketing import show_content_marketing
 from frontend.reports import show_reports
+from frontend.tiktok_ads import show_tiktok_ads
 from frontend.weekly_review import show_weekly_review
 from frontend.views import dashboard, campaigns, content, keywords, drafts, settings
 
@@ -29,7 +30,7 @@ st.markdown("""
 PAGES = {
     "Dashboard": dashboard, "Weekly Review": show_weekly_review, "Campaigns": campaigns, "Ad Content": content,
     "Keywords": keywords, "Drafts": drafts, "Settings": settings,
-    "Content Marketing": show_content_marketing, "Reports": show_reports,
+    "Content Marketing": show_content_marketing, "TikTok Ads": show_tiktok_ads, "Reports": show_reports,
 }
 
 
@@ -70,6 +71,9 @@ def app():
     nav = st.sidebar.radio("Workspace", list(PAGES), key=f"nav:{org_id}")
     if nav == "Content Marketing":
         show_content_marketing(base)
+        return
+    if nav == "TikTok Ads":
+        show_tiktok_ads(base)
         return
     accounts = call(f"{base}/accounts")
     account = None

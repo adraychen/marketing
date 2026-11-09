@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import date, datetime
+from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote, urlsplit
 
 import google.auth
@@ -45,6 +46,65 @@ def shopify_token(client, shop, client_id, client_secret):
     ))["access_token"]
 
 
+class StorefrontHead(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.fields = {}
+        self.title = []
+        self.in_title = False
+        self.finished = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "body":
+            self.finished = True
+        if self.finished:
+            return
+        attrs = dict(attrs)
+        if tag == "title":
+            self.in_title = True
+        elif tag == "meta":
+            name = attrs.get("property") or attrs.get("name")
+            field = {"description": "meta_description", "og:title": "social_title",
+                     "og:description": "social_description"}.get(name)
+            if field and attrs.get("content"):
+                self.fields.setdefault(field, attrs["content"].strip())
+        elif tag == "link" and "canonical" in (attrs.get("rel") or "").lower().split():
+            if attrs.get("href"):
+                self.fields.setdefault("canonical_url", attrs["href"].strip())
+
+    def handle_endtag(self, tag):
+        if tag == "head":
+            self.finished = True
+        elif tag == "title":
+            self.in_title = False
+
+    def handle_data(self, data):
+        if self.in_title and not self.finished:
+            self.title.append(data)
+
+
+def storefront_metadata(client, url):
+    head = StorefrontHead()
+    remaining = 256 * 1024
+    unavailable = {"seo_status": "Could not verify the published page"}
+    try:
+        with client.stream("GET", url, follow_redirects=False, timeout=5) as response:
+            if not response.is_success or "text/html" not in response.headers.get("content-type", "").lower():
+                return unavailable
+            for chunk in response.iter_text(chunk_size=8192):
+                head.feed(chunk[:remaining])
+                remaining -= len(chunk)
+                if head.finished or remaining <= 0:
+                    break
+    except (httpx.HTTPError, ValueError):
+        return unavailable
+    title = " ".join("".join(head.title).split())
+    if title:
+        head.fields["seo_title"] = title
+    complete = all(head.fields.get(key) for key in ("seo_title", "meta_description", "canonical_url"))
+    return {**head.fields, "seo_status": "Read from published page" if complete else "Some SEO fields were unavailable"}
+
+
 def shopify_articles(client, shop, token, storefront, blog):
     cursor = None
     while True:
@@ -70,9 +130,11 @@ def shopify_articles(client, shop, token, storefront, blog):
             if datetime.fromisoformat(article["publishedAt"]) > datetime.now().astimezone():
                 continue
             path = f"/blogs/{blog}/{article['handle']}"
+            url = storefront.rstrip("/") + path
             yield {
                 "external_id": article["id"], "title": article["title"],
-                "url": storefront.rstrip("/") + path, "published_at": article["publishedAt"], "data": article,
+                "url": url, "published_at": article["publishedAt"],
+                "data": {**article, **storefront_metadata(client, url)},
             }
         if not page["pageInfo"]["hasNextPage"]:
             return
@@ -165,6 +227,14 @@ def destination(url):
     return None
 
 
+def post_hashtags(message):
+    text = re.sub(r"https?://\S+", "", message)
+    tags = {}
+    for tag in re.findall(r"(?<![\w#])#\w+", text):
+        tags.setdefault(tag.casefold(), tag)
+    return list(tags.values())
+
+
 def facebook_posts(client, page, token, version):
     endpoint = f"https://graph.facebook.com/{version}/{page}/published_posts"
     headers = {"Authorization": f"Bearer {token}"}
@@ -185,7 +255,7 @@ def facebook_posts(client, page, token, version):
             title = message.strip().splitlines()
             yield {"external_id": post["id"], "title": title[0][:180] if title else "Facebook post",
                    "url": destination(post.get("permalink_url")), "published_at": post["created_time"],
-                   "data": {"links": sorted(links)}}
+                   "data": {"links": sorted(links), "message": message, "hashtags": post_hashtags(message)}}
         paging = body.get("paging", {})
         if not paging.get("next"):
             return

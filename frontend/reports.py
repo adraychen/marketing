@@ -13,8 +13,9 @@ from backend.metrics import previous_period, summarize
 from backend.models import Creative
 from backend.review import MIN_CLICKS, weekly_review
 from backend.validation import validate
-from frontend.client import call
+from frontend.client import APIError, call
 from frontend.content_marketing import GA_LABELS, SOURCE_LABELS, grouped
+from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
 from frontend.views import coverage, metric_by_resource, period_rows
 
 INLINE_LIMIT = 200_000
@@ -288,13 +289,36 @@ def add_content(report, route, catalog, campaign, params, terms=False):
         for source, label in SOURCE_LABELS.items()
     ])
     daily, snapshots, post_links = [], [], []
+    article_review, facebook_review = [], []
     for item in items:
         details = call(f"{route}/items/{item['id']}", params=params)
         context = {"item_id": item["id"], "title": item["title"]}
+        metadata = details.get("metadata", {})
+        review = {**context, "published_at": item["published_at"], "url": item["url"]}
+        if item["source"] == "shopify":
+            article_review.append({
+                **review, "blog": (metadata.get("blog") or {}).get("title"), "handle": metadata.get("handle"),
+                "updated_at": metadata.get("updatedAt"), "tags": metadata.get("tags"),
+                "image_url": (metadata.get("image") or {}).get("url"),
+                "seo_status": metadata.get("seo_status", "SEO metadata has not been collected"),
+                **{key: metadata.get(key) for key in ("seo_title", "meta_description", "canonical_url",
+                                                      "social_title", "social_description")},
+            })
+        elif item["source"] == "facebook":
+            facebook_review.append({
+                **review, "post_text": metadata.get("message"), "hashtags": metadata.get("hashtags"),
+                "destination_links": metadata.get("links"),
+                "metadata_status": "Imported" if "message" in metadata else "Post text has not been collected",
+            })
         daily.extend({**context, **split_metrics(row)} for row in details["daily"]
                      if terms or row["report"] != "gsc_query")
         snapshots.extend({**context, **split_metrics(row)} for row in details["snapshots"])
         post_links.extend({**context, **row} for row in details["links"])
+    report.note("Shopify SEO fields describe the live article page at sync time. Social titles and descriptions "
+                "are the Open Graph tags published by the storefront. Facebook rows describe Page posts. "
+                "Paid Meta ad creative and ad-level performance require a Meta Ads account connection.")
+    report.table("Shopify article review", article_review)
+    report.table("Facebook Page post review", facebook_review)
     totals = []
     for keys, rows in grouped(daily, "item_id", "title", "report", "source_account",
                               "segment", "currency", "timezone").items():
@@ -354,9 +378,11 @@ def show_reports(org, base, account, mode):
                              min_value=date(2000, 1, 14), max_value=last) if account else None
     terms = st.checkbox("Include Google Ads search terms and Search Console queries")
     drafts = st.checkbox("Include saved ad drafts", disabled=account is None)
+    include_tiktok = st.checkbox("Include TikTok Ads", value=True)
     st.caption("Includes performance totals, daily rows, Weekly Review, content links, and sync status. "
                "Existing AI results for the selected week are included when available in this session.")
-    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts)
+    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts,
+             include_tiktok)
     if st.button("Generate report", type="primary"):
         st.session_state.pop("generated-report", None)
         with st.spinner("Preparing report…"):
@@ -376,6 +402,8 @@ def show_reports(org, base, account, mode):
                 report.note("No Google Ads account is connected.")
                 report.table("Marketing fact verification", fact_checks([]))
             add_content(report, content_route, catalog, campaign, params, terms)
+            if include_tiktok:
+                add_tiktok(report, base, params)
             contents = [{"Section": name, "Rows": len(rows)} for name, rows in report.sections if name]
             st.session_state["generated-report"] = scope, report.export(), contents
     saved = st.session_state.get("generated-report")
@@ -386,3 +414,19 @@ def show_reports(org, base, account, mode):
         if extension == "zip":
             st.info("Unzip the report and share report.md together with all its CSV files.")
         st.download_button("Download report", data, f"okoo-marketing-{start}-{end}.{extension}", mime)
+
+
+def add_tiktok(report, base, params):
+    try:
+        configured = call(f"{base}/tiktok-ads/status")["configured"]
+        if not configured:
+            report.note("TikTok Ads is not connected for this organization.")
+            return
+        rows = call(f"{base}/tiktok-ads/report", params=params, timeout=90)["rows"]
+    except APIError:
+        report.note("TikTok Ads reporting was unavailable when this export was generated. "
+                    "Open TikTok Ads in the dashboard to retry.")
+        return
+    report.note(TIKTOK_NOTE)
+    report.table("TikTok Ads campaign totals", campaign_totals(rows))
+    report.table("TikTok Ads daily campaign performance", rows)

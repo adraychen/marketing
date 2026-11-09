@@ -118,8 +118,9 @@ def catalog(org):
 
 def details(org, item_id, start, end):
     with database() as cur:
-        cur.execute("select id from marketing_content_items where organization_id=%s and id=%s", (org, item_id))
-        if not cur.fetchone():
+        cur.execute("select data from marketing_content_items where organization_id=%s and id=%s", (org, item_id))
+        item = cur.fetchone()
+        if not item:
             return None
         cur.execute("""
             select report,source_account,day,segment,timezone,currency,metrics
@@ -139,7 +140,12 @@ def details(org, item_id, start, end):
             join marketing_content_items p on (p.organization_id,p.id)=(l.organization_id,l.post_id)
             where l.organization_id=%s and (l.post_id=%s or l.article_id=%s) order by l.url
         """, (org, item_id, item_id))
-        return {"daily": daily, "snapshots": snapshots, "links": cur.fetchall()}
+        data = item["data"]
+        review_fields = ("message", "hashtags", "links", "tags", "handle", "blog", "image", "updatedAt",
+                         "seo_title", "meta_description", "canonical_url", "social_title", "social_description",
+                         "seo_status")
+        return {"daily": daily, "snapshots": snapshots, "links": cur.fetchall(),
+                "metadata": {field: data[field] for field in review_fields if field in data}}
 
 
 def linked_entities(org, slug):

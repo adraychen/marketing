@@ -1,3 +1,4 @@
+import os
 from datetime import date, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -10,6 +11,7 @@ from fastapi.responses import JSONResponse
 from backend import content_repository, demo, repositories as repo
 from backend.auth import Login, Refresh, current_user, session
 from backend.config import MODE
+from backend.connectors import tiktok
 from backend.connectors.google_ads import GoogleAdsError
 from backend.jobs import SyncBusy, configured_org, connector, run_sync
 from backend.metrics import previous_period
@@ -64,6 +66,29 @@ def content_catalog(org: str, _member=Depends(member)):
     if MODE == "demo":
         return {"campaigns": [], "items": [], "sources": []}
     return content_repository.catalog(org)
+
+
+@app.get("/orgs/{org}/tiktok-ads/status")
+def tiktok_status(org: str, _member=Depends(member)):
+    return {"configured": MODE == "live" and tiktok.configured(org)}
+
+
+@app.get("/orgs/{org}/tiktok-ads/report")
+def tiktok_report(org: str, start: date, end: date, _member=Depends(member)):
+    if not tiktok_status(org, _member)["configured"]:
+        raise HTTPException(404, "TikTok Ads is not connected for this organization.")
+    if start > end or end - start > timedelta(days=365):
+        raise HTTPException(422, "Choose a valid TikTok date range of up to 366 days.")
+    try:
+        with httpx.Client(timeout=15) as client:
+            rows = tiktok.campaign_report(
+                client, tiktok.advertiser_for(org), os.environ["TIKTOK_ADS_ACCESS_TOKEN"].strip(), start, end,
+            )
+    except tiktok.TikTokReportError as exc:
+        raise HTTPException(502, str(exc)) from None
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, OverflowError):
+        raise HTTPException(502, "TikTok reporting is temporarily unavailable.") from None
+    return {"rows": rows}
 
 
 @app.get("/orgs/{org}/content/items/{item_id}")
