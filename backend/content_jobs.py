@@ -9,6 +9,7 @@ import httpx
 from psycopg2.extras import Json
 
 from backend import content_repository as repo
+from backend.facebook_analytics import collect_page_metrics, unsupported_page_metrics, write_page_metrics
 from backend.config import MODE
 from backend.connectors.content import (
     ContentError, analytics_reports, facebook_metrics, facebook_posts, facebook_video_reference, inspect_article,
@@ -151,13 +152,17 @@ def post_insights(client, org, page, token, version):
             _, permalink_id = facebook_video_reference(post["url"])
             metrics = facebook_metrics(client, post["external_id"], token, version,
                                        availability=availability, video_id=post["data"].get("video_id") or permalink_id)
-            errors = {"Authentication failed", "Permission unavailable", "API request failure"} & set(availability.values())
+            errors = {"Authentication failed", "Permission unavailable", "API request failure", "Rate limited"} & set(
+                availability[key] for key in availability if key not in metrics
+            )
             if errors:
                 failures += 1
                 first_error = first_error or ", ".join(sorted(errors))
             with database() as cur:
                 repo.write_snapshot(cur, org, post["id"], today, version, {**metrics, "availability": availability})
             records += bool(metrics)
+            if "Rate limited" in errors or "Authentication failed" in errors:
+                break
         except SOURCE_ERRORS as exc:
             failures += 1
             first_error = first_error or message(exc)
@@ -165,6 +170,22 @@ def post_insights(client, org, page, token, version):
     if not failures and not records:
         first_error = "No reportable Meta metrics returned. See per-metric availability."
     return finish(org, "facebook_insights", status, records, first_error)
+
+
+def page_insights(client, org, page, token, version, days):
+    source = "facebook_page_insights"
+    if not page or not token:
+        return finish(org, source, "skipped", message="Facebook source is not configured.")
+    today = datetime.now(ZoneInfo(environment("CONTENT_SNAPSHOT_TIMEZONE", "America/Toronto"))).date()
+    end = datetime.now(ZoneInfo("America/Los_Angeles")).date() - timedelta(days=1)
+    skip = unsupported_page_metrics(org, page, version)
+    rows = collect_page_metrics(client, page, token, version, end - timedelta(days=days - 1), end, today, skip=skip)
+    write_page_metrics(org, page, version, rows)
+    count = sum(row[2] != "status" for row in rows)
+    errors = {"Authentication failed", "Permission unavailable", "API request failure", "Rate limited"}
+    failures = {row[-1] for row in rows} & errors
+    status = ("partial" if count else "failed") if failures else "succeeded"
+    return finish(org, source, status, count, ", ".join(sorted(failures)) or None)
 
 
 def diagnose(client, org, shop, page, token, version):
@@ -229,6 +250,10 @@ def diagnose(client, org, shop, page, token, version):
             print(f"Facebook token resolves to configured Page: {identity.get('id') == page}")
         except SOURCE_ERRORS as exc:
             print(f"Facebook Page identity check: {message(exc)}")
+        today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+        rows = collect_page_metrics(client, page, token, version, today - timedelta(days=7),
+                                    today - timedelta(days=1), today)
+        print("Facebook Page metric availability:", {row[0]: row[-1] for row in rows if row[2] == "status"})
         for post in posts:
             kind, permalink_id = facebook_video_reference(post["url"])
             availability = {}
@@ -302,6 +327,7 @@ def main():
         article_indexing(client, org, environment("CONTENT_GSC_SITE"), shop)
         failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
         failed |= post_insights(client, org, page, meta_token, version)
+        failed |= page_insights(client, org, page, meta_token, version, days if args.backfill else 28)
     return int(failed)
 
 

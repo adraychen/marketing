@@ -6,7 +6,7 @@ from backend.connectors.content import facebook_video_reference
 from backend.metrics import ratio
 
 VIDEO_FIELDS = ("total_video_views", "total_video_view_total_time", "total_video_avg_time_watched",
-                "total_video_retention_graph")
+                "total_video_retention_graph", "total_video_60s_excludes_shorter_views")
 POST_FIELDS = ("post_media_view", "post_total_media_view_unique", "post_clicks",
                "reactions", "comments", "shares", "link_clicks")
 CUMULATIVE_FIELDS = ("post_media_view", "post_clicks", "total_video_views", "total_video_view_total_time")
@@ -92,25 +92,30 @@ def facebook_latest(snapshots, kind):
     latest = max(snapshots, key=lambda row: row["observed_at"], default=None)
     metrics = latest["metrics"] if latest else {}
     states = metrics.get("availability", {})
-    fields = (*POST_FIELDS, *VIDEO_FIELDS) if kind in {"reel", "video"} else POST_FIELDS
+    fields = (*POST_FIELDS, "outbound_clicks")
+    if kind in {"reel", "video"}:
+        fields = (*fields, *VIDEO_FIELDS)
     values = {key: metrics.get(key) for key in fields}
     clicks = metrics.get("post_clicks_by_type")
-    if isinstance(clicks, dict):
-        values["link_clicks"] = next((value for label, value in clicks.items()
-                                     if label.strip().casefold().replace("_", " ") in {"link click", "link clicks"}
-                                     and isinstance(value, (int, float)) and not isinstance(value, bool)), None)
+    categories = {label.strip().casefold().replace("_", " "): value for label, value in clicks.items()
+                  if type(value) in (int, float)} if isinstance(clicks, dict) else {}
+    for metric, label in (("link_clicks", "link click"), ("outbound_clicks", "outbound click")):
+        values[metric] = categories.get(label + "s", categories.get(label))
     engagement = [values[key] for key in ("reactions", "comments", "shares")]
     views = values["post_media_view"]
     engagement_rate = ratio(sum(engagement), views) if all(isinstance(value, (int, float)) for value in engagement) \
         and isinstance(views, (int, float)) else None
     availability = {
-        key: "Reported" if values[key] is not None else states.get(key, "Availability not recorded")
+        key: states.get(key, "Reported") if values[key] is not None else states.get(key, "Availability not recorded")
         for key in fields
     }
     if values["link_clicks"] is None:
         availability["link_clicks"] = states.get("post_clicks_by_type", "Click breakdown availability not recorded")
         if availability["link_clicks"] == "Reported" or isinstance(clicks, dict):
             availability["link_clicks"] = "No link-click category returned"
+    if values["outbound_clicks"] is None:
+        availability["outbound_clicks"] = ("No outbound-click category returned" if isinstance(clicks, dict)
+                                            else states.get("post_clicks_by_type", "Click breakdown availability not recorded"))
     if latest is None:
         availability = {key: "No snapshot in selected range" for key in fields}
     return {"observed_at": latest["observed_at"] if latest else None,

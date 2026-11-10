@@ -4,11 +4,12 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
+from psycopg2.errors import UndefinedTable, UniqueViolation
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from backend import content_repository, demo, repositories as repo
+from backend import content_repository, demo, facebook_analytics, repositories as repo
 from backend.auth import Login, Refresh, current_user, session
 from backend.config import MODE
 from backend.connectors import tiktok
@@ -66,6 +67,58 @@ def content_catalog(org: str, _member=Depends(member)):
     if MODE == "demo":
         return {"campaigns": [], "items": [], "sources": []}
     return content_repository.catalog(org)
+
+
+@app.get("/orgs/{org}/content/facebook-analytics")
+def facebook_analytics_report(org: str, start: date, end: date, membership=Depends(member)):
+    if start > end or end - start > timedelta(days=365):
+        raise HTTPException(422, "Choose a valid date range of up to 366 days.")
+    if MODE == "demo":
+        return {"page": [], "availability": [], "pages": [], "manual": [], "can_edit": False}
+    try:
+        data = facebook_analytics.analytics(org, start, end)
+    except UndefinedTable:
+        raise HTTPException(503, "Apply the Facebook analytics database migration to enable this section.") from None
+    return {**data, "can_edit": membership["role"] == "admin"}
+
+
+def facebook_editor(membership=Depends(member)):
+    if MODE != "live" or membership["role"] != "admin":
+        raise HTTPException(403, "An organization admin can manage manual Facebook observations.")
+    return membership
+
+
+def save_facebook_observation(org, observation, observation_id=None):
+    try:
+        saved = facebook_analytics.save_manual(org, observation, str(observation_id) if observation_id else None)
+    except LookupError:
+        raise HTTPException(404, "Facebook Page or content is unavailable in this organization.") from None
+    except UniqueViolation:
+        raise HTTPException(409, "An observation already exists for this metric and period.") from None
+    if saved is None:
+        if observation_id:
+            raise HTTPException(404, "Manual observation unavailable.")
+        raise HTTPException(409, "An observation already exists for this metric and period.")
+    return saved
+
+
+@app.post("/orgs/{org}/content/facebook-analytics/manual")
+def create_facebook_observation(org: str, observation: facebook_analytics.ManualObservation,
+                                _editor=Depends(facebook_editor)):
+    return save_facebook_observation(org, observation)
+
+
+@app.put("/orgs/{org}/content/facebook-analytics/manual/{observation_id}")
+def edit_facebook_observation(org: str, observation_id: UUID, observation: facebook_analytics.ManualObservation,
+                              _editor=Depends(facebook_editor)):
+    return save_facebook_observation(org, observation, observation_id)
+
+
+@app.delete("/orgs/{org}/content/facebook-analytics/manual/{observation_id}")
+def delete_facebook_observation(org: str, observation_id: UUID, _editor=Depends(facebook_editor)):
+    if not facebook_analytics.delete_manual(org, str(observation_id)):
+        raise HTTPException(404, "Manual observation unavailable.")
+    return {"deleted": True}
 
 
 @app.get("/orgs/{org}/tiktok-ads/status")

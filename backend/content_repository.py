@@ -119,7 +119,7 @@ def catalog(org):
         cur.execute("select slug,name from marketing_content_campaigns where organization_id=%s order by name", (org,))
         campaigns = cur.fetchall()
         cur.execute("""
-            select i.id,i.title,i.source,i.url,i.published_at,i.active,
+            select i.id,i.title,i.source,i.source_account,i.url,i.published_at,i.active,
                 coalesce(array_agg(c.campaign_slug) filter (where c.campaign_slug is not null), '{}') as campaigns
             from marketing_content_items i left join marketing_content_campaign_items c
                 on (i.organization_id,i.id)=(c.organization_id,c.item_id)

@@ -12,7 +12,7 @@ from google.auth.transport.requests import Request
 SHOPIFY_VERSION = "2026-10"
 META_METRICS = ("post_media_view", "post_total_media_view_unique", "post_clicks", "post_clicks_by_type")
 META_VIDEO_METRICS = ("total_video_views", "total_video_view_total_time", "total_video_avg_time_watched",
-                      "total_video_retention_graph")
+                      "total_video_retention_graph", "total_video_60s_excludes_shorter_views")
 
 
 class ContentError(Exception):
@@ -397,22 +397,34 @@ def facebook_posts(client, page, token, version):
         params["after"] = paging["cursors"]["after"]
 
 
-def facebook_metrics(client, post, token, version, *, availability=None, video_id=None):
-    endpoint = f"https://graph.facebook.com/{version}/{post}"
+def facebook_reader(client, token, states):
     headers = {"Authorization": f"Bearer {token}"}
-    states = availability if availability is not None else {}
-    results = {}
+    halted = None
+
     def read(url, params, key):
+        nonlocal halted
+        if halted:
+            states[key] = halted
+            return {}
         try:
             response = client.get(url, headers=headers, params=params)
-            body = response.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPError:
             states[key] = "API request failure"
             return {}
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
         if not response.is_success or body.get("error"):
             code = body.get("error", {}).get("code")
             if response.status_code == 401 or code == 190:
                 states[key] = "Authentication failed"
+                halted = states[key]
+            elif response.status_code == 429 or code in (4, 17, 32, 613, 80001):
+                states[key] = "Rate limited"
+                halted = states[key]
             elif response.status_code == 403 or code in (10, 200):
                 states[key] = "Permission unavailable"
             elif code == 100:
@@ -423,6 +435,14 @@ def facebook_metrics(client, post, token, version, *, availability=None, video_i
             return {}
         states[key] = "No data returned"
         return body
+    return read
+
+
+def facebook_metrics(client, post, token, version, *, availability=None, video_id=None):
+    endpoint = f"https://graph.facebook.com/{version}/{post}"
+    states = availability if availability is not None else {}
+    results = {}
+    read = facebook_reader(client, token, states)
 
     for field in ("reactions", "comments", "shares"):
         expression = field if field == "shares" else f"{field}.limit(0).summary(true)"
@@ -446,4 +466,12 @@ def facebook_metrics(client, post, token, version, *, availability=None, video_i
             if value is not None:
                 results[metric] = value
                 states[metric] = "Reported"
+    if "reactions" not in results and states.get("reactions") != "Authentication failed":
+        metric = "post_reactions_by_type_total"
+        for entry in read(f"{endpoint}/insights", {"metric": metric, "period": "lifetime"}, metric).get("data", []):
+            values = entry.get("values", [])
+            counts = entry.get("total_value", {}).get("value", values[-1].get("value") if values else None)
+            if isinstance(counts, dict) and counts and all(type(value) is int and value >= 0 for value in counts.values()):
+                results["reactions"] = sum(counts.values())
+                states["reactions"] = "Reported via reactions by type"
     return results

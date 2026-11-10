@@ -9,12 +9,14 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+from backend.facebook_analytics import AUDIENCE
 from backend.metrics import previous_period, ratio, summarize
 from backend.models import Creative
 from backend.review import MIN_CLICKS, weekly_review
 from backend.validation import validate
 from frontend.client import APIError, call
 from frontend.content_marketing import GA_LABELS, SOURCE_LABELS, grouped
+from frontend.facebook_analytics import availability_rows, manual_rows, page_rows
 from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
 from frontend.visibility import (
     facebook_changes, facebook_kind, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review,
@@ -299,6 +301,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                     "content cron version and the visibility migration before interpreting these gaps.")
     daily, snapshots, post_links = [], [], []
     article_review, facebook_review = [], []
+    facebook_snapshots = {}
     search, queries, diagnostics, facebook, reels, intervals, coverage_rows = [], [], [], [], [], [], []
     for item in items:
         details = call(f"{route}/items/{item['id']}", params=params)
@@ -359,6 +362,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                                     "Check publication history, previews, and path reuse.")
             diagnostics.extend({**context, "observation": note} for note in observations)
         elif item["source"] == "facebook":
+            facebook_snapshots[item["id"]] = item_snapshots
             kind = facebook_kind(item, metadata)
             facebook_review.append({
                 **review, "post_text": metadata.get("message"), "hashtags": metadata.get("hashtags"),
@@ -368,7 +372,8 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                 "distribution": "Published Page content. Paid distribution is unverified.",
                 "metadata_status": "Imported" if "message" in metadata else "Post text has not been collected",
             })
-            latest = {**context, "content_type": kind, **facebook_latest(item_snapshots, kind)}
+            latest = {**context, "content_type": kind, "published_at": item["published_at"], "url": item["url"],
+                      "source": "Facebook Graph API", **facebook_latest(item_snapshots, kind)}
             facebook.append(latest)
             if kind in {"reel", "video"}:
                 reels.append(latest)
@@ -407,6 +412,8 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                 "Reach, impressions, and paid or organic reach are unavailable from this import. "
                 "Check Meta Business Suite for account-visible reach and impressions. "
                 "Meta link clicks count only an explicit click category and do not establish outbound site visits.")
+    report.note("Video-node watch times are in milliseconds. A video-node lifetime value is a separate observation "
+                "from a Reel watch-time total for selected Business Dashboard dates.")
     report.table("Content data coverage", coverage_rows)
     report.table("Content visibility diagnostics", diagnostics)
     totals = []
@@ -454,6 +461,25 @@ def add_content(report, route, catalog, campaign, params, terms=False):
             ads.extend({"content_campaign": slug, **row} for row in links["ads"])
     report.table("Linked Shopify products", products)
     report.table("Linked Google Ads campaigns", ads)
+    return facebook_snapshots
+
+
+def add_facebook_analytics(report, route, params, snapshots, campaign):
+    try:
+        data = call(f"{route}/facebook-analytics", params=params)
+    except APIError as exc:
+        report.note(f"Facebook Page and manual analytics unavailable. {exc}")
+        return
+    if campaign:
+        data = {**data, "manual": [row for row in data["manual"] if not row["item_id"] or row["item_id"] in snapshots]}
+    rows = page_rows(data, params["start"], params["end"])
+    report.note("Facebook Page visibility covers the Page across content campaigns. API daily metrics use Meta "
+                "reporting boundaries. Follower totals are point observations. Unique counts and overlapping "
+                "Page, post, and reel metrics are shown separately.")
+    report.table("Facebook Page Visibility", [row for row in rows if row["metric"] not in AUDIENCE])
+    report.table("Facebook Audience Growth", [row for row in rows if row["metric"] in AUDIENCE])
+    report.table("Manual Analytics Observations", manual_rows(data, rows, snapshots))
+    report.table("Facebook Data Availability and API Limitations", availability_rows(data, rows))
 
 
 def show_reports(org, base, account, mode):
@@ -503,7 +529,8 @@ def show_reports(org, base, account, mode):
             else:
                 report.note("No Google Ads account is connected.")
                 report.table("Marketing fact verification", fact_checks([]))
-            add_content(report, content_route, catalog, campaign, params, terms)
+            snapshots = add_content(report, content_route, catalog, campaign, params, terms)
+            add_facebook_analytics(report, content_route, params, snapshots, campaign)
             if include_tiktok:
                 add_tiktok(report, base, params)
             contents = [{"Section": name, "Rows": len(rows)} for name, rows in report.sections if name]

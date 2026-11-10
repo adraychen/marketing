@@ -9,6 +9,7 @@ import streamlit as st
 
 from backend.metrics import ratio
 from frontend.client import call
+from frontend.facebook_analytics import show_facebook_analytics
 from frontend.views import table
 from frontend.visibility import (
     facebook_changes, facebook_kind, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review,
@@ -19,6 +20,7 @@ SOURCE_LABELS = {
     "shopify": "Shopify articles", "facebook": "Facebook posts", "ga4": "Google Analytics",
     "ga4_traffic": "Google Analytics traffic sources",
     "search_console": "Search Console", "facebook_insights": "Facebook post insights",
+    "facebook_page_insights": "Facebook Page insights",
     "search_console_inspection": "Search Console URL Inspection",
 }
 GA_LABELS = {
@@ -190,8 +192,12 @@ def show_visibility_summary(route, items):
             kind = facebook_kind(item, metadata)
             latest = facebook_latest(details["snapshots"], kind)
             facebook.append({"content": item["title"], "type": kind,
+                             "published_at": item["published_at"], "url": item["url"],
                              **{field: latest[field] for field in ("observed_at", "post_media_view",
-                                                                   "reactions", "comments", "shares", "post_clicks")},
+                                                                   "post_total_media_view_unique", "reactions",
+                                                                   "comments", "shares", "post_clicks", "link_clicks")},
+                             **{field: latest.get(field) for field in ("total_video_views", "total_video_view_total_time",
+                                                                      "total_video_avg_time_watched")},
                              "views_unavailable": latest["post_media_view"] is None})
     st.subheader("Shopify visibility summary")
     table(articles)
@@ -228,15 +234,12 @@ def show_content_marketing(base):
                 "Last success": status.get(key, {}).get("last_success_at"),
                 "Records": status.get(key, {}).get("records"), "Details": status.get(key, {}).get("message")}
                for key, label in SOURCE_LABELS.items()])
-    if not catalog["items"]:
-        st.info("No published content has been imported into this workspace.")
-        return
-
     campaigns = {item["slug"]: item["name"] for item in catalog["campaigns"]}
     campaign = st.selectbox("Content campaign", [*campaigns, ""],
                             format_func=lambda key: campaigns.get(key, "All discovered content"))
     items = [item for item in catalog["items"] if not campaign or campaign in item["campaigns"]]
-    library, performance, associations = st.tabs(("Overview", "Content performance", "Linked products & ads"))
+    library, performance, facebook, associations = st.tabs(
+        ("Overview", "Content performance", "Facebook analytics", "Linked products & ads"))
     with library:
         table([{"Title": item["title"], "Source": SOURCE_LABELS[item["source"]], "Published": item["published_at"],
                 "Status": "Published" if item["active"] else "No longer listed"} for item in items])
@@ -247,6 +250,8 @@ def show_content_marketing(base):
             st.info("No items are linked to this campaign yet.")
         else:
             show_item_performance(route, items)
+    with facebook:
+        show_facebook_analytics(route, catalog["items"])
     with associations:
         if not campaign:
             st.info("Select a content campaign to see its product and Google Ads associations.")
