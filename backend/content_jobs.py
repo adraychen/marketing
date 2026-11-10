@@ -146,15 +146,22 @@ def post_insights(client, org, page, token, version):
     if not posts:
         return finish(org, "facebook_insights", "skipped", message="No published posts discovered.")
     records, failures, first_error = 0, 0, None
+    restricted_fields = set()
     for post in posts:
         try:
             availability = {}
             _, permalink_id = facebook_video_reference(post["url"])
             metrics = facebook_metrics(client, post["external_id"], token, version,
                                        availability=availability, video_id=post["data"].get("video_id") or permalink_id)
-            errors = {"Authentication failed", "Permission unavailable", "API request failure", "Rate limited"} & set(
-                availability[key] for key in availability if key not in metrics
-            )
+            optional_restrictions = {
+                key for key in ("reactions", "comments")
+                if metrics and availability.get(key) == "Permission unavailable"
+            }
+            restricted_fields.update(optional_restrictions)
+            errors = {"Authentication failed", "Permission unavailable", "API request failure", "Rate limited"} & {
+                state for key, state in availability.items()
+                if key not in metrics and key not in optional_restrictions
+            }
             if errors:
                 failures += 1
                 first_error = first_error or ", ".join(sorted(errors))
@@ -169,6 +176,10 @@ def post_insights(client, org, page, token, version):
     status = "succeeded" if not failures else "partial" if records else "failed"
     if not failures and not records:
         first_error = "No reportable Meta metrics returned. See per-metric availability."
+    if restricted_fields:
+        fields = ", ".join(sorted(restricted_fields))
+        warning = f"Permission unavailable for optional fields: {fields}."
+        first_error = f"{first_error} {warning}" if first_error else warning
     return finish(org, "facebook_insights", status, records, first_error)
 
 
