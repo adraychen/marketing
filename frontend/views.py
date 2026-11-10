@@ -10,7 +10,7 @@ import streamlit as st
 from backend.metrics import previous_period, summarize
 from backend.models import Creative
 from backend.validation import validate
-from frontend.client import call
+from frontend.client import APIError, call
 
 METRICS = (
     ("spend", "Spend", "money"), ("value", "Conversion value", "money"),
@@ -368,47 +368,141 @@ def drafts(report, account, route, _start, _end):
             st.rerun()
 
 
-def settings(mode, org, base, account, tiktok_configured):
-    st.title("Settings")
+def select_ad_account(org_id, base):
+    accounts = {row["id"]: row for row in call(f"{base}/accounts")}
+    if not accounts:
+        return None
+    selected = st.selectbox("Ad account", list(accounts),
+                            format_func=lambda key: f"{accounts[key]['name']} · {accounts[key]['currency']}",
+                            key=f"account:{org_id}")
+    return accounts[selected]
+
+
+CONTENT_SYNC_SOURCES = {
+    "Facebook": ("facebook", {"facebook": "Published posts", "facebook_insights": "Post insights",
+                              "facebook_page_insights": "Page insights"}),
+    "Shopify": ("shopify", {"shopify": "Published articles", "ga4": "GA4 article performance",
+                           "ga4_traffic": "GA4 traffic sources", "search_console": "Search performance",
+                           "search_console_inspection": "Search indexing"}),
+}
+
+
+def sync_result(status, records, message=None):
+    if status == "succeeded":
+        if not records:
+            return "No data returned"
+        return "Synced with warnings" if message else "Synced"
+    if status in {"failed", "partial"} and "permission unavailable" in (message or "").lower():
+        return "Permission needed" if status == "failed" else "Partial · permission needed"
+    return pretty(status) if status else "No run recorded"
+
+
+def content_sync(base, platform):
+    source, labels = CONTENT_SYNC_SOURCES[platform]
+    catalog = call(f"{base}/content")
+    accounts = sorted({item["source_account"] for item in catalog["items"]
+                       if item["source"] == source and item["source_account"] and item["active"]})
+    if accounts:
+        selected = st.selectbox("Facebook Page ID" if source == "facebook" else "Shopify store", accounts,
+                                key=f"sync-source:{base}:{source}")
+        total = sum(item["source"] == source and item["source_account"] == selected and item["active"]
+                    for item in catalog["items"])
+        st.caption(f"{total:,} published items in the dashboard for this selection.")
+    else:
+        st.info("No account with imported content yet. Check the content sync job configuration and latest run.")
+    st.caption("The content sync job refreshes the Page and store configured on Render. "
+               "Run the job there to refresh them on demand.")
+    status = {row["source"]: row for row in catalog["sources"]}
+    st.markdown("**Latest organization sync by source**")
+    st.caption("The job records these results for the organization as a whole.")
+    rows = []
+    for key, label in labels.items():
+        row = status.get(key, {})
+        rows.append({"Data": label, "Result": sync_result(row.get("status"), row.get("records"), row.get("message")),
+                     "Records": row.get("records"), "Last run": row.get("finished_at"),
+                     "Last success": row.get("last_success_at"),
+                     "Details": row.get("message")})
+    table(rows)
+
+
+def settings(mode, org, base):
+    st.title("Connections & Sync")
     st.caption(f"{org['name']} · {pretty(org['role'])}")
-    with st.expander("Connections", expanded=True):
-        if tiktok_configured is None:
-            st.warning("TikTok Ads connection status is unavailable.")
-        elif tiktok_configured:
-            st.success("TikTok Ads is configured. Open Campaigns to view performance.")
-        else:
-            st.info("TikTok Ads is not connected for this organization.")
-    st.subheader("Google Ads")
-    if mode == "demo":
-        st.info("Two synthetic advertising accounts are available. Demo revisions are saved on this machine.")
+    platform = st.radio("Platform", ("Google Ads", "Facebook", "Shopify", "TikTok Ads"),
+                        horizontal=True, key=f"sync-platform:{base}")
+    if platform in CONTENT_SYNC_SOURCES:
+        content_sync(base, platform)
         return
-    if org["role"] == "admin":
-        if st.button("Discover accessible accounts"):
-            st.session_state[f"discovery:{base}"] = call(f"{base}/discovery", timeout=90)
-        options = st.session_state.get(f"discovery:{base}", [])
-        if options:
-            mapping = {item["resource"]: item for item in options}
-            picked = st.selectbox("Available Google Ads account", list(mapping), format_func=lambda key:
-                                  f"{mapping[key]['name']} · {key.split('/')[-1]} · {mapping[key]['currency']}")
-            if st.button("Connect account"):
-                call(f"{base}/accounts", "POST", params={"resource": picked}, timeout=90)
-                st.session_state.flash = "Google Ads account connected. Run a sync to import its data."
-                st.rerun()
-        elif f"discovery:{base}" in st.session_state:
-            st.info("The configured service account returned no eligible Google Ads accounts.")
+    if platform == "TikTok Ads":
+        status = call(f"{base}/tiktok-ads/status")
+        if status["configured"]:
+            advertiser = status.get("advertiser_id")
+            st.write(f"Configured advertiser · {advertiser}" if advertiser else "TikTok Ads is configured.")
+            st.info("TikTok data is fetched on demand. Open Campaigns → TikTok Ads and select Load TikTok report.")
+            saved = st.session_state.get(f"tiktok-report:{base}")
+            if saved:
+                dates, rows = saved
+                st.caption(f"Last report in this session · {dates[0]} to {dates[1]} · "
+                           f"{len(rows):,} daily campaign records.")
+            st.caption("Available data includes spend, impressions, clicks, and conversions by campaign and day.")
+        else:
+            st.info("TikTok Ads is not connected. An admin can configure an authorized advertiser on the backend.")
+        return
+
+    account = select_ad_account(org["id"], base)
+    if mode == "demo":
+        st.info("Demo accounts use synthetic data. Live synchronization is available in live mode.")
+        return
     if account:
+        st.caption(f"{account['currency']} · {account['timezone']} · Scheduled or on-demand import")
         route = f"{base}/accounts/{account['id']}"
-        st.markdown(f"**Selected account**")
-        st.text(f"{account['name']} · {account['currency']} · {account['timezone']}")
-        if org["role"] == "admin" and st.button("Sync now", type="primary"):
-            with st.spinner("Importing Google Ads data…"):
-                call(f"{route}/sync", "POST", timeout=600)
-            st.session_state.flash = "Google Ads synchronization completed."
-            st.rerun()
-        st.subheader("Synchronization history")
-        for row in call(f"{route}/sync"):
-            with st.expander(f"{pretty(row['status'])} · {row['created_at']}"):
-                if row["error"]:
-                    st.error(row["error"])
-                if row["counts"]:
-                    table([{"Records": pretty(key), "Count": value} for key, value in row["counts"].items()])
+        if org["role"] == "admin" and st.button("Sync Google Ads data", type="primary"):
+            try:
+                with st.spinner("Importing Google Ads data…"):
+                    call(f"{route}/sync", "POST", timeout=600)
+            except APIError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state.flash = "Google Ads synchronization completed."
+                st.rerun()
+
+        history = call(f"{route}/sync")
+        st.subheader("Latest sync")
+        if history:
+            latest = history[0]
+            st.caption(f"{pretty(latest['status'])} · {latest.get('finished_at') or latest['created_at']}")
+            if latest["error"]:
+                st.error(latest["error"])
+            if latest["counts"]:
+                table([{"Data": pretty(key), "Result": sync_result(latest["status"], value), "Records": value}
+                       for key, value in latest["counts"].items()])
+            else:
+                st.info("Record counts are unavailable for this run.")
+            if len(history) > 1:
+                with st.expander("Earlier runs"):
+                    rows = []
+                    for run in history[1:]:
+                        counts = ", ".join(f"{pretty(key)}: {value:,}" for key, value in (run["counts"] or {}).items())
+                        rows.append({"Started": run["created_at"], "Result": pretty(run["status"]),
+                                     "Records by type": counts or None, "Details": run["error"]})
+                    table(rows)
+        else:
+            st.info("No sync runs recorded for this account.")
+    else:
+        st.info("Connect a Google Ads account to import data.")
+
+    if org["role"] == "admin":
+        with st.expander("Connect a Google Ads account", expanded=account is None):
+            if st.button("Discover accessible accounts"):
+                st.session_state[f"discovery:{base}"] = call(f"{base}/discovery", timeout=90)
+            options = st.session_state.get(f"discovery:{base}")
+            if options:
+                mapping = {item["resource"]: item for item in options}
+                picked = st.selectbox("Available Google Ads account", list(mapping), format_func=lambda key:
+                                      f"{mapping[key]['name']} · {key.split('/')[-1]} · {mapping[key]['currency']}")
+                if st.button("Connect account"):
+                    call(f"{base}/accounts", "POST", params={"resource": picked}, timeout=90)
+                    st.session_state.flash = "Google Ads account connected. Run a sync to import its data."
+                    st.rerun()
+            elif options is not None:
+                st.info("The configured service account returned no eligible Google Ads accounts.")

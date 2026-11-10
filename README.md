@@ -22,7 +22,7 @@ Run these in two terminals from the same directory.
 .\.venv\Scripts\python.exe -m streamlit run frontend/app.py --server.address 127.0.0.1
 ```
 
-Open [the local dashboard](http://127.0.0.1:8501). Select either synthetic ad account and explore Dashboard, Campaigns, Ad Content, Keywords, Drafts, and Settings. Demo mode requires no credentials. Its revisions persist in the SQLite file named by `DEMO_DB`; use it as a local, shared sandbox.
+Open [the local dashboard](http://127.0.0.1:8501). Select either synthetic ad account and explore Dashboard, Campaigns, Ad Content, and Connections & Sync. Keywords and Drafts are under Ad Content. Demo mode requires no credentials. Its revisions persist in the SQLite file named by `DEMO_DB`; use it as a local, shared sandbox.
 
 ## Configure Supabase
 
@@ -51,13 +51,13 @@ Open [the local dashboard](http://127.0.0.1:8501). Select either synthetic ad ac
 1. Enable the Google Ads API in the Google Cloud project that owns the backend's Google service account. Request production-account access on the Google Ads API overview in Cloud Console if the project only has Test access. Google Ads API v26 uses the project's access level.
 2. Create a Google service account and grant its email **Read-only** access under **Admin → Access and security** in the advertising account or its manager. For a local deployment, store the service-account JSON outside the repository and set `GOOGLE_APPLICATION_CREDENTIALS` to its absolute path. Restrict file access to the backend and scheduled worker. Google Auth uses Application Default Credentials.
 3. Set `GOOGLE_ADS_ORGANIZATION_ID` to the UUID from Supabase. This deployment has one backend Google identity and maps it to one organization. If needed, set `GOOGLE_ADS_MANAGER_ID` to the directly accessible manager's 10 digits to limit which manager hierarchy is traversed. Directly accessible advertiser accounts are also discovered.
-4. Restart the backend. As an organization admin, open **Settings → Discover accessible accounts**, select a Google Ads account, then select **Connect account**. Choose it in the sidebar and select **Sync now**. Inspect synchronization history for record counts and errors.
+4. Restart the backend. As an organization admin, open **Connections & Sync → Google Ads → Connect a Google Ads account**. Select **Discover accessible accounts**, choose an account, and select **Connect account**. Select the connected account and choose **Sync Google Ads data**. Check the latest result and record counts on the same page.
 
 [Google Ads API access](https://developers.google.com/google-ads/api/docs/api-policy/developer-token) · [Google service accounts](https://developers.google.com/google-ads/api/docs/oauth/service-accounts) · [v26 release notes](https://developers.google.com/google-ads/api/docs/release-notes)
 
 ### Schedule imports
 
-Use Windows Task Scheduler to run a daily task under an identity that can read the backend configuration and Google credentials. Set **Program/script** to the absolute path of `.venv\Scripts\python.exe`, **Add arguments** to `-m backend.jobs`, and **Start in** to the absolute `marketing_dashboard` directory. Run the task once on demand and confirm success under **Settings → Synchronization history**. On other hosts, call the same module from cron or your job runner.
+Use Windows Task Scheduler to run a daily task under an identity that can read the backend configuration and Google credentials. Set **Program/script** to the absolute path of `.venv\Scripts\python.exe`, **Add arguments** to `-m backend.jobs`, and **Start in** to the absolute `marketing_dashboard` directory. Run the task once on demand and confirm success under **Connections & Sync → Google Ads**. On other hosts, call the same module from cron or your job runner.
 
 A first import defaults to 180 days and subsequent runs refresh 30 recent days, filling any gap after an outage. Both windows are configurable. Dates use the advertising account's timezone. A transaction applies the import and replaces stale daily rows for the refreshed range after all Google reads succeed. Account-level advisory locks serialize manual and scheduled runs. Incomplete runs retain the prior successful snapshot.
 
@@ -102,11 +102,26 @@ Create a separate Render Cron Job from this repository. Use `pip install -r requ
 
 Configure only the sources you can authorize. Keep secrets in Render. A successful Shopify discovery seeds **Citizen Eco-Drive vs Automatic** using the published Journal article. A Facebook post joins the pilot when its attachment resolves to the article path and carries the exact source, medium, and campaign tags. Unassigned content appears under **All discovered content**. Product and Google Ads associations are explicit. Populate them only after confirming the Shopify product GID or Google Ads account and campaign resource. They are displayed as related entities rather than credited conversions.
 
-Trigger the job once and check **Content Marketing → Source status**. Compare the article's views, tagged landing sessions, and Google Search clicks to the source reports using the same dates. The first run looks back up to 90 days, bounded by publication date. Subsequent runs refresh 14 GA4 days and 7 finalized Search Console days, filling gaps after missed runs. Use `python -m backend.content_jobs --backfill` for a bounded replay after connecting a new Facebook link to an older article. Meta history starts with the first observation. Blank metrics indicate unavailable values, and lifetime observations are never summed.
+Trigger the job once and check **Connections & Sync → Shopify** and **Connections & Sync → Facebook**. Compare the article's views, tagged landing sessions, and Google Search clicks to the source reports using the same dates. The first run looks back up to 90 days, bounded by publication date. Subsequent runs refresh 14 GA4 days and 7 finalized Search Console days, filling gaps after missed runs. Use `python -m backend.content_jobs --backfill` for a bounded replay after connecting a new Facebook link to an older article. Meta history starts with the first observation. Blank metrics indicate unavailable values, and lifetime observations are never summed.
 
 The pilot measures purchases recorded in sessions that began on the article. Validate the live Facebook link, GA4 checkout continuity, and purchase event parameters before using revenue to judge the campaign. Page discovery and reporting read from the providers. Publishing stays in Shopify and Facebook.
 
 [Shopify access tokens](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens) · [GA4 reporting API](https://developers.google.com/analytics/devguides/reporting/data/v1/quickstart) · [Search Console API](https://developers.google.com/webmaster-tools/v1/searchanalytics/query) · [Render cron jobs](https://render.com/docs/cronjobs)
+
+## Connections & Sync
+
+| Platform | Select an account | Refresh data | Check the result |
+| --- | --- | --- | --- |
+| Google Ads | Choose a connected ad account. Admins can discover and connect more accounts. | Select **Sync Google Ads data** as an admin, or use the scheduled Google Ads job. | See the latest run and counts for campaigns, ad groups, ads, keywords, search terms, and performance. Earlier runs are listed below. |
+| Facebook | Select a Page with imported content. The selection shows that Page's published item count. | The Render content job uses the Page configured by CONTENT_META_PAGE_ID. Trigger that job in Render for an on-demand run. | See posts, post insights, and Page insights, including record counts and any permission warnings. |
+| Shopify | Select a store with imported content. The selection shows that store's published item count. | The same Render content job uses the store configured by CONTENT_SHOPIFY_SHOP. | See article discovery, GA4 article performance and traffic, Search Console performance, and indexing results. |
+| TikTok Ads | View the advertiser configured for the current organization. | In **Campaigns → TikTok Ads**, choose dates and select **Load TikTok report**. | See the loaded report in Campaigns and its date range and record count in Connections & Sync during the same session. |
+
+Facebook and Shopify run status is recorded per source and organization. To change which Page or store the job imports, update its Render environment. Selecting a Page or store in the dashboard changes the content shown in the account summary.
+
+**No data returned** means a successful run returned zero records for that data source. **Permission needed** means the provider denied access to some or all requested data. Check **Details** for the provider message and **Records** for what was saved.
+
+For TikTok Ads, set TIKTOK_ADS_ORGANIZATION_ID, TIKTOK_ADS_ADVERTISER_ID, and TIKTOK_ADS_ACCESS_TOKEN on the FastAPI backend. Each backend deployment supports one configured TikTok advertiser for the specified organization. Store the access token as a secret with reporting access.
 
 ## Tests
 

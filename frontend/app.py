@@ -16,7 +16,7 @@ from frontend.content_marketing import show_content_marketing
 from frontend.reports import show_reports
 from frontend.tiktok_ads import show_tiktok_ads
 from frontend.weekly_review import show_weekly_review
-from frontend.views import dashboard, campaigns, content, keywords, drafts, settings
+from frontend.views import dashboard, campaigns, content, keywords, drafts, select_ad_account, settings
 
 st.set_page_config(page_title="Okoo Marketing", page_icon="📈", layout="wide")
 st.markdown("""
@@ -27,7 +27,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-NAVIGATION = ("Dashboard", "Weekly Review", "Campaigns", "Ad Content", "Reports", "Settings")
+NAVIGATION = ("Dashboard", "Weekly Review", "Campaigns", "Ad Content", "Reports", "Connections & Sync")
 AD_CONTENT_VIEWS = {"Ads & Assets": content, "Keywords": keywords, "Drafts": drafts}
 
 
@@ -73,7 +73,7 @@ def app():
             show_content_marketing(base)
             return
     tiktok_configured = False
-    if mode == "live" and nav in {"Campaigns", "Settings"}:
+    if mode == "live" and nav == "Campaigns":
         try:
             tiktok_configured = call(f"{base}/tiktok-ads/status")["configured"]
         except APIError:
@@ -84,27 +84,22 @@ def app():
             show_tiktok_ads(base)
             return
 
-    accounts = call(f"{base}/accounts")
-    account = None
-    if accounts:
-        mapping = {account["id"]: account for account in accounts}
-        account_id = st.selectbox("Ad account", list(mapping),
-            format_func=lambda key: f"{mapping[key]['name']} · {mapping[key]['currency']}", key=f"account:{org_id}")
-        account = mapping[account_id]
     flash = st.session_state.pop("flash", None)
     if flash:
         st.success(flash)
-    if nav == "Settings":
-        settings(mode, org, base, account, tiktok_configured)
+    if nav == "Connections & Sync":
+        settings(mode, org, base)
         return
+    account = select_ad_account(org_id, base)
     if nav == "Reports":
         show_reports(org, base, account, mode)
         return
     if account is None:
         st.title(nav)
-        st.info("Connect a Google Ads account in Settings to get started.")
+        st.info("Connect a Google Ads account in Connections & Sync to get started.")
         return
 
+    account_id = account["id"]
     today = datetime.now(ZoneInfo(account["timezone"])).date()
     end = today - timedelta(days=1)
     route = f"{base}/accounts/{account_id}"

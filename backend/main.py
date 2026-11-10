@@ -123,7 +123,8 @@ def delete_facebook_observation(org: str, observation_id: UUID, _editor=Depends(
 
 @app.get("/orgs/{org}/tiktok-ads/status")
 def tiktok_status(org: str, _member=Depends(member)):
-    return {"configured": MODE == "live" and tiktok.configured(org)}
+    configured = MODE == "live" and tiktok.configured(org)
+    return {"configured": configured, "advertiser_id": tiktok.advertiser_for(org) if configured else None}
 
 
 @app.get("/orgs/{org}/tiktok-ads/report")
