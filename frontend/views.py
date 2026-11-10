@@ -368,9 +368,16 @@ def drafts(report, account, route, _start, _end):
             st.rerun()
 
 
-def settings(mode, org, base, account):
+def settings(mode, org, base, account, tiktok_configured):
     st.title("Settings")
     st.caption(f"{org['name']} · {pretty(org['role'])}")
+    with st.expander("Connections", expanded=True):
+        if tiktok_configured is None:
+            st.warning("TikTok Ads connection status is unavailable.")
+        elif tiktok_configured:
+            st.success("TikTok Ads is configured. Open Campaigns to view performance.")
+        else:
+            st.info("TikTok Ads is not connected for this organization.")
     st.subheader("Google Ads")
     if mode == "demo":
         st.info("Two synthetic advertising accounts are available. Demo revisions are saved on this machine.")

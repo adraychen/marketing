@@ -27,11 +27,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-PAGES = {
-    "Dashboard": dashboard, "Weekly Review": show_weekly_review, "Campaigns": campaigns, "Ad Content": content,
-    "Keywords": keywords, "Drafts": drafts, "Settings": settings,
-    "Content Marketing": show_content_marketing, "TikTok Ads": show_tiktok_ads, "Reports": show_reports,
-}
+NAVIGATION = ("Dashboard", "Weekly Review", "Campaigns", "Ad Content", "Reports", "Settings")
+AD_CONTENT_VIEWS = {"Ads & Assets": content, "Keywords": keywords, "Drafts": drafts}
 
 
 def sign_in():
@@ -68,25 +65,37 @@ def app():
                                   format_func=lambda key: next(o["name"] for o in orgs if o["id"] == key))
     org = next(org for org in orgs if org["id"] == org_id)
     base = f"/orgs/{org_id}"
-    nav = st.sidebar.radio("Workspace", list(PAGES), key=f"nav:{org_id}")
-    if nav == "Content Marketing":
-        show_content_marketing(base)
-        return
-    if nav == "TikTok Ads":
-        show_tiktok_ads(base)
-        return
+    nav = st.sidebar.radio("Navigation", NAVIGATION, key=f"nav:{org_id}")
+    if nav == "Ad Content":
+        view = st.radio("Ad Content", ("Ads & Assets", "Keywords", "Content Marketing", "Drafts"),
+                        horizontal=True, key=f"ad-content:{org_id}")
+        if view == "Content Marketing":
+            show_content_marketing(base)
+            return
+    tiktok_configured = False
+    if mode == "live" and nav in {"Campaigns", "Settings"}:
+        try:
+            tiktok_configured = call(f"{base}/tiktok-ads/status")["configured"]
+        except APIError:
+            tiktok_configured = None
+    if nav == "Campaigns" and tiktok_configured:
+        channel = st.radio("Ad channel", ("Google Ads", "TikTok Ads"), horizontal=True, key=f"channel:{org_id}")
+        if channel == "TikTok Ads":
+            show_tiktok_ads(base)
+            return
+
     accounts = call(f"{base}/accounts")
     account = None
     if accounts:
         mapping = {account["id"]: account for account in accounts}
-        account_id = st.sidebar.selectbox("Ad account", list(mapping),
+        account_id = st.selectbox("Ad account", list(mapping),
             format_func=lambda key: f"{mapping[key]['name']} · {mapping[key]['currency']}", key=f"account:{org_id}")
         account = mapping[account_id]
     flash = st.session_state.pop("flash", None)
     if flash:
         st.success(flash)
     if nav == "Settings":
-        settings(mode, org, base, account)
+        settings(mode, org, base, account, tiktok_configured)
         return
     if nav == "Reports":
         show_reports(org, base, account, mode)
@@ -104,11 +113,11 @@ def app():
         show_weekly_review(account, route, end, health.get("review_ai") and org["role"] == "admin")
         return
 
-    selected = st.sidebar.radio("Date range", ["7 days", "30 days", "90 days", "Custom"], index=1,
-                                key=f"range:{account_id}")
+    selected = st.radio("Date range", ("7 days", "30 days", "90 days", "Custom"), index=1,
+                        horizontal=True, key=f"range:{account_id}")
     if selected == "Custom":
-        dates = st.sidebar.date_input("Start and end", (end - timedelta(days=29), end),
-                                      max_value=today, key=f"dates:{account_id}")
+        dates = st.date_input("Start and end", (end - timedelta(days=29), end),
+                              max_value=today, key=f"dates:{account_id}")
         if len(dates) != 2:
             st.info("Select a start and end date.")
             return
@@ -116,7 +125,8 @@ def app():
     else:
         start = end - timedelta(days=int(selected.split()[0]) - 1)
     report = call(f"{route}/report", params={"start": start.isoformat(), "end": end.isoformat()})
-    PAGES[nav](report, account, route, start, end)
+    render = AD_CONTENT_VIEWS[view] if nav == "Ad Content" else campaigns if nav == "Campaigns" else dashboard
+    render(report, account, route, start, end)
 
 
 try:
