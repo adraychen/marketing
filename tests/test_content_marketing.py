@@ -52,6 +52,8 @@ def test_ga4_requests_separate_page_landing_and_facebook_reports(monkeypatch):
         "landingPage", "sessionManualSource", "sessionManualMedium", "sessionManualCampaignName",
     ]
     assert rows[2]["currency"] == "CAD"
+    for row in rows[1:3]:
+        assert {"itemViewEvents", "addToCarts", "checkouts", "ecommercePurchases"} <= row["metrics"].keys()
     assert json.loads(rows[2]["segment"]) == repo.PILOT_UTM
     assert json.loads(rows[3]["segment"])["sessionMedium"] == "sessionMedium"
     assert json.loads(rows[3]["segment"])["traffic_scope"] == "landing_sessions"
@@ -245,11 +247,26 @@ def test_content_schema_pilot_associations_and_isolation(monkeypatch):
             for views in (0, 0, 2):
                 repo.write_snapshot(cur, org, post_id, DAY, "v26.0", {"post_media_view": views})
             assert [row["metrics"]["post_media_view"] for row in repo.details(org, post_id, DAY, DAY)["snapshots"]] == [0, 2]
+            assert repo.details(org, post_id, DAY, DAY)["tagged_landing"] == []
+            unique_url = TAGGED + "&utm_content=reel_one"
+            post["data"]["links"] = [unique_url]
+            repo.write_items(cur, org, "facebook", "page", [post])
+            repo.associate(cur, org, "shop", "page")
+            segment = json.dumps(repo.link_utm(unique_url), sort_keys=True)
+            landing = content.metric_row("ga4_facebook", DAY, "America/Toronto",
+                                         {"sessions": 1, "ecommercePurchases": 1}, segment=segment)
+            for _ in range(2):
+                repo.write_daily(cur, org, article_id, "property", ["ga4_facebook"], DAY, DAY, [landing])
+            tagged = repo.details(org, post_id, DAY, DAY)["tagged_landing"]
+            assert len(tagged) == 1 and tagged[0]["metrics"]["ecommercePurchases"] == 1
+            repo.write_items(cur, org, "facebook", "page", [post, {**post, "external_id": "repost"}])
+            repo.associate(cur, org, "shop", "page")
+            assert repo.details(org, post_id, DAY, DAY)["tagged_landing"] == []
             assert repo.details(other, article_id, DAY, DAY) is None
             cur.execute("set local role authenticated")
             cur.execute("select set_config('request.jwt.claim.sub', %s, true)", (user,))
             cur.execute("select count(*) as count from marketing_content_items where organization_id in (%s,%s)", (org, other))
-            assert cur.fetchone()["count"] == 2
+            assert cur.fetchone()["count"] == 3
     finally:
         conn.rollback()
         conn.close()

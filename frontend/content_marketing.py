@@ -10,6 +10,7 @@ import streamlit as st
 from backend.metrics import ratio
 from frontend.client import call
 from frontend.facebook_analytics import show_facebook_analytics
+from frontend.utm import show_utm_builder
 from frontend.views import table
 from frontend.visibility import (
     facebook_changes, facebook_kind, facebook_latest, prepublication_rows, search_queries, search_totals, seo_review,
@@ -26,6 +27,7 @@ SOURCE_LABELS = {
 GA_LABELS = {
     "screenPageViews": "Article views", "activeUsers": "Daily active users", "sessions": "Landing sessions",
     "engagedSessions": "Engaged sessions", "ecommercePurchases": "Purchases", "purchaseRevenue": "Purchase revenue",
+    "itemViewEvents": "Product view events", "addToCarts": "Add-to-cart events", "checkouts": "Checkout starts",
     "userEngagementDuration": "Engagement time in seconds", "engagementRate": "Engagement rate",
     "newUsers": "Daily new users",
 }
@@ -51,8 +53,12 @@ def ga_report(title, rows, *, totals=True):
                 and any(key in row["metrics"] for row in entries)]
         if totals and keys:
             for column, key in zip(st.columns(len(keys)), keys):
-                value = sum(row["metrics"].get(key, 0) for row in entries)
-                formatted = f"{value:,.2f} {currency or ''}".strip() if key == "purchaseRevenue" else f"{value:,.0f}"
+                values = [row["metrics"].get(key) for row in entries]
+                if any(value is None for value in values):
+                    formatted = "Not available"
+                else:
+                    value = sum(values)
+                    formatted = f"{value:,.2f} {currency or ''}".strip() if key == "purchaseRevenue" else f"{value:,.0f}"
                 column.metric(GA_LABELS[key], formatted)
         table([{"Date": row["day"], **{GA_LABELS[key]: value for key, value in row["metrics"].items()}}
                for row in entries])
@@ -107,7 +113,12 @@ def show_article(item, details):
                    f"{row['publication_date_in_ga4_timezone']} in {row['timezone']}.")
     ga_report("Article readership", [row for row in daily if row["report"] == "ga4_views"])
     st.caption("Active users are shown by day because a person can return on multiple days.")
-    ga_report("Sessions that began on this article", [row for row in daily if row["report"] == "ga4_landing"])
+    landing = [row for row in daily if row["report"] == "ga4_landing"]
+    ga_report("Sessions that began on this article", landing)
+    if not landing:
+        for column, label in zip(st.columns(2), ("GA4 purchases in landing sessions", "GA4 revenue in landing sessions")):
+            column.metric(label, "Not available")
+    st.caption("Order-level article attribution is not available.")
     tagged = [row for row in daily if row["report"] == "ga4_facebook"]
     if not tagged:
         st.caption("No Facebook-tagged landing data returned for these dates.")
@@ -199,8 +210,9 @@ def show_visibility_summary(route, items):
                              **{field: latest.get(field) for field in ("total_video_views", "total_video_view_total_time",
                                                                       "total_video_avg_time_watched")},
                              "views_unavailable": latest["post_media_view"] is None})
-    st.subheader("Shopify visibility summary")
-    table(articles)
+    if articles:
+        st.subheader("Shopify visibility summary")
+        table(articles)
     coverage_rows = [row for row in articles if row["source"] == "Coverage"]
     st.caption(f"{sum(row['indexing'] == 'Indexed' for row in coverage_rows)} verified indexed · "
                f"{sum(row['missing_analytics'] for row in coverage_rows)} articles without analytics rows")
@@ -215,6 +227,8 @@ def show_visibility_summary(route, items):
             columns[0].metric(f"Search impressions · {prop}", f"{impressions:,}")
             columns[1].metric("Search clicks", f"{clicks:,}")
             columns[2].metric("Search CTR", f"{clicks / impressions:.2%}" if impressions else "—")
+    if not facebook:
+        return
     st.subheader("Facebook visibility summary")
     st.caption(f"{len(facebook)} items · {sum(row['type'] == 'reel' for row in facebook)} identified reels · "
                f"{sum(row['views_unavailable'] for row in facebook)} without reported media views. "
@@ -222,8 +236,8 @@ def show_visibility_summary(route, items):
     table(facebook)
 
 
-def show_content_marketing(base):
-    st.title("Content Marketing")
+def show_content_marketing(base, source):
+    st.title("Organic Marketing")
     st.caption("Track published Shopify articles and Facebook posts alongside store and search performance.")
     route = f"{base}/content"
     catalog = call(route)
@@ -237,9 +251,13 @@ def show_content_marketing(base):
     campaigns = {item["slug"]: item["name"] for item in catalog["campaigns"]}
     campaign = st.selectbox("Content campaign", [*campaigns, ""],
                             format_func=lambda key: campaigns.get(key, "All discovered content"))
-    items = [item for item in catalog["items"] if not campaign or campaign in item["campaigns"]]
-    library, performance, facebook, associations = st.tabs(
-        ("Overview", "Content performance", "Facebook analytics", "Linked products & ads"))
+    items = [item for item in catalog["items"]
+             if item["source"] == source and (not campaign or campaign in item["campaigns"])]
+    tabs = ["Overview", "Content performance", "Linked products & ads"]
+    if source == "facebook":
+        tabs.append("Facebook analytics")
+    tabs.append("UTM Link Builder")
+    library, performance, associations, *additional = st.tabs(tabs)
     with library:
         table([{"Title": item["title"], "Source": SOURCE_LABELS[item["source"]], "Published": item["published_at"],
                 "Status": "Published" if item["active"] else "No longer listed"} for item in items])
@@ -250,8 +268,11 @@ def show_content_marketing(base):
             st.info("No items are linked to this campaign yet.")
         else:
             show_item_performance(route, items)
-    with facebook:
-        show_facebook_analytics(route, catalog["items"])
+    if source == "facebook":
+        with additional[0]:
+            show_facebook_analytics(route, catalog["items"])
+    with additional[-1]:
+        show_utm_builder(base, source, catalog["items"])
     with associations:
         if not campaign:
             st.info("Select a content campaign to see its product and Google Ads associations.")
@@ -278,6 +299,15 @@ def show_item_performance(route, items):
         show_article(item, details)
     else:
         show_facebook(item, details)
+    if item["source"] == "facebook":
+        tagged_landing = details.get("tagged_landing", [])
+        if tagged_landing:
+            ga_report("GA4 sessions on article links unique to this post", tagged_landing)
+            st.caption("Purchases and revenue are from those tagged sessions. Shopify order attribution is unavailable.")
+        else:
+            for column, label in zip(st.columns(3), ("Tagged website sessions", "GA4 purchases", "GA4 purchase revenue")):
+                column.metric(label, "Not available")
+            st.caption("Per-post outcomes require reported GA4 data and a content-specific link unique to this post.")
     if details["links"]:
         st.markdown("**Post links and campaign tags**")
         table([{"Article": row["article"], "Facebook post": row["post"], "Link": row["url"], **row["utm"]}

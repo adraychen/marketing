@@ -287,6 +287,8 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
 def add_content(report, route, catalog, campaign, params, terms=False):
     items = [item for item in catalog["items"] if not campaign or campaign in item["campaigns"]]
     report.table("Published content catalog", items)
+    report.note("Per-post GA4 outcomes require a content-specific link unique to the Facebook post. "
+                "They are tagged landing-session outcomes.")
     sources = {row["source"]: row for row in catalog["sources"]}
     report.table("Content source status", [
         {"source": source, "label": label, "status": source_status(sources.get(source)),
@@ -302,6 +304,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     daily, snapshots, post_links = [], [], []
     article_review, facebook_review = [], []
     facebook_snapshots = {}
+    post_landing = []
     search, queries, diagnostics, facebook, reels, intervals, coverage_rows = [], [], [], [], [], [], []
     for item in items:
         details = call(f"{route}/items/{item['id']}", params=params)
@@ -362,6 +365,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                                     "Check publication history, previews, and path reuse.")
             diagnostics.extend({**context, "observation": note} for note in observations)
         elif item["source"] == "facebook":
+            post_landing.extend({**context, **row} for row in details.get("tagged_landing", []))
             facebook_snapshots[item["id"]] = item_snapshots
             kind = facebook_kind(item, metadata)
             facebook_review.append({
@@ -461,6 +465,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
             ads.extend({"content_campaign": slug, **row} for row in links["ads"])
     report.table("Linked Shopify products", products)
     report.table("Linked Google Ads campaigns", ads)
+    report.table("Facebook post tagged landing sessions", post_landing)
     return facebook_snapshots
 
 
@@ -483,7 +488,7 @@ def add_facebook_analytics(report, route, params, snapshots, campaign):
 
 
 def show_reports(org, base, account, mode):
-    st.title("Reports")
+    st.title("Reports & AI Insights")
     st.caption("Export synced metrics for people and AI tools. Large reports include full CSV tables.")
     content_route = f"{base}/content"
     catalog = call(content_route)
@@ -523,12 +528,27 @@ def show_reports(org, base, account, mode):
                 "content_visibility_objective": "Increase Shopify blog article and Facebook content views",
             }])
             params = {"start": start.isoformat(), "end": end.isoformat()}
+            report.table("Executive marketing summary", [
+                {"area": "Paid advertising", "coverage": "Google Ads account reporting and TikTok when configured"},
+                {"area": "Organic marketing", "coverage": "Facebook Page and posts, Shopify blog, GA4 and Search Console"},
+                {"area": "Commercial outcome", "coverage": "Canonical Shopify order totals and order attribution unavailable"},
+            ])
+            report.note("Meta paid reporting is not connected. Facebook Page and post insights describe organic content.")
+            report.table("Purchase conversion and attribution", [
+                {"measure": "Shopify orders and revenue", "status": "Unavailable", "basis": "Requires a Shopify order source"},
+                {"measure": "GA4 article landing purchases and revenue", "status": "Shown where reported",
+                 "basis": "Sessions that began on an article. Tagged subsets may overlap landing totals."},
+                {"measure": "Google Ads conversions and value", "status": "Shown where reported",
+                 "basis": "Ad platform attribution and configured conversion actions. May include actions other than purchases."},
+            ])
             if account:
                 add_ads(report, account, f"{base}/accounts/{account['id']}", params, start, end,
                         week_end, terms, drafts)
             else:
                 report.note("No Google Ads account is connected.")
                 report.table("Marketing fact verification", fact_checks([]))
+            report.note("Use the AI interpretations alongside coverage and purchase evidence. "
+                        "Check measurement when sales outcomes are unavailable. CTR alone is not a basis for increasing spend.")
             snapshots = add_content(report, content_route, catalog, campaign, params, terms)
             add_facebook_analytics(report, content_route, params, snapshots, campaign)
             if include_tiktok:

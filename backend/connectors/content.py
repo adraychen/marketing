@@ -173,7 +173,8 @@ def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None)
     endpoint = f"https://analyticsdata.googleapis.com/v1beta/properties/{property_id}:runReport"
     headers = google_headers(endpoint, "analytics.readonly")
     path = urlsplit(url).path
-    landing = ("sessions", "engagedSessions", "ecommercePurchases", "purchaseRevenue")
+    landing = ("sessions", "engagedSessions", "ecommercePurchases", "purchaseRevenue",
+               "itemViewEvents", "addToCarts", "checkouts")
     acquisition = ("sessions", "engagedSessions", "engagementRate", "userEngagementDuration", "activeUsers", "newUsers")
     traffic_dimensions = ("landingPage", "sessionSource", "sessionMedium", "sessionDefaultChannelGroup")
     reports = [("ga4_views", "pagePath", ("screenPageViews", "activeUsers", "userEngagementDuration"), [], "", ()),

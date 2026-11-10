@@ -134,6 +134,26 @@ def catalog(org):
         return {"campaigns": campaigns, "items": items, "sources": cur.fetchall()}
 
 
+def organic_summary(org, start, end):
+    with database() as cur:
+        cur.execute("""
+            select d.report,d.source_account,d.currency,
+                   sum((d.metrics->>'screenPageViews')::numeric) as article_views,
+                   sum((d.metrics->>'sessions')::numeric) as landing_sessions,
+                   sum((d.metrics->>'ecommercePurchases')::numeric) as landing_purchases,
+                   sum((d.metrics->>'purchaseRevenue')::numeric) as landing_revenue,
+                   sum((d.metrics->>'clicks')::numeric) as search_clicks,
+                   sum((d.metrics->>'impressions')::numeric) as search_impressions
+            from marketing_content_daily_metrics d
+            join marketing_content_items i on (i.organization_id,i.id)=(d.organization_id,d.item_id)
+            where d.organization_id=%s and i.source='shopify' and d.day between %s and %s
+                and d.report in ('ga4_views','ga4_landing','gsc_page')
+            group by d.report,d.source_account,d.currency
+            order by d.report,d.source_account,d.currency
+        """, (org, start, end))
+        return cur.fetchall()
+
+
 def details(org, item_id, start, end):
     with database() as cur:
         cur.execute("select data, external_id from marketing_content_items where organization_id=%s and id=%s",
@@ -159,11 +179,32 @@ def details(org, item_id, start, end):
             join marketing_content_items p on (p.organization_id,p.id)=(l.organization_id,l.post_id)
             where l.organization_id=%s and (l.post_id=%s or l.article_id=%s) order by l.url
         """, (org, item_id, item_id))
+        links = cur.fetchall()
+        tagged_landing = []
+        if links:
+            cur.execute("""
+                select distinct d.item_id,d.day,d.source_account,d.currency,d.timezone,d.segment,d.metrics
+                from marketing_content_links l
+                join marketing_content_daily_metrics d
+                  on (d.organization_id,d.item_id)=(l.organization_id,l.article_id)
+                where l.organization_id=%s and l.post_id=%s and d.report='ga4_facebook'
+                  and d.day between %s and %s
+                  and l.utm->>'utm_source'='facebook' and l.utm->>'utm_medium'='organic_social'
+                  and coalesce(l.utm->>'utm_content','')<>'' and not (l.utm ? 'utm_term')
+                  and (case when d.report='ga4_facebook' then d.segment::jsonb end)=l.utm
+                  and not exists (
+                    select 1 from marketing_content_links other
+                    where (other.organization_id,other.article_id)=(l.organization_id,l.article_id)
+                      and other.post_id<>l.post_id and (other.utm - 'utm_term')=l.utm
+                  )
+                order by d.day,d.source_account,d.segment
+            """, (org, item_id, start, end))
+            tagged_landing = cur.fetchall()
         data = item["data"]
         review_fields = ("message", "hashtags", "links", "tags", "handle", "blog", "image", "updatedAt",
                          "seo_title", "meta_description", "canonical_url", "social_title", "social_description",
                          "seo_status", "seo_checked_at", "indexing", "content_type", "media_reference", "video_id")
-        return {"daily": daily, "snapshots": snapshots, "links": cur.fetchall(),
+        return {"daily": daily, "snapshots": snapshots, "links": links, "tagged_landing": tagged_landing,
                 "metadata": {"external_id": item["external_id"],
                              **{field: data[field] for field in review_fields if field in data}}}
 

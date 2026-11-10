@@ -60,26 +60,42 @@ def test_demo_launch_and_all_pages(tmp_path, monkeypatch):
 
         app = AppTest.from_file(str(root / "frontend" / "app.py"), default_timeout=20).run()
         assert not app.exception and not app.error
+        assert app.title[0].value == "Marketing Performance"
+        assert any(metric.label == "Shopify orders" and metric.value == "Not available" for metric in app.metric)
+        app.sidebar.radio[0].set_value("Paid Advertising").run()
+        assert app.title[0].value == "All Paid"
+        next(widget for widget in app.radio if widget.label == "Paid platform").set_value("Meta Ads").run()
+        assert any("not connected" in item.value for item in app.info)
+        next(widget for widget in app.radio if widget.label == "Paid platform").set_value("Google Ads").run()
         assert len(app.metric) == 10
-        for page, view, title in (
-            ("Ad Content", "Content Marketing", "Content Marketing"),
-            ("Weekly Review", None, "Weekly performance review"),
-            ("Campaigns", None, "Campaigns"),
-            ("Ad Content", "Ads & Assets", "Ad Content"),
-            ("Ad Content", "Keywords", "Keywords & search terms"),
-            ("Ad Content", "Drafts", "Draft revisions"),
-            ("Connections & Sync", None, "Connections & Sync"),
+
+        for page, title in (
+            ("Weekly Review", "Weekly performance review"),
+            ("Campaigns", "Campaigns"), ("Ad Content", "Ad Content"),
         ):
-            app.sidebar.radio[0].set_value(page).run()
-            if view:
-                next(widget for widget in app.radio if widget.label == "Ad Content").set_value(view).run()
+            next(widget for widget in app.radio if widget.label == "Google Ads view").set_value(page).run()
             assert not app.exception and not app.error
             assert app.title[0].value == title
-            if view == "Drafts":
-                save = next(button for button in app.button if button.label == "Save draft")
-                assert not save.disabled
-                save.click().run()
-                assert app.success[0].value == "Draft saved."
+        for view, title in (("Keywords", "Keywords & search terms"), ("Drafts", "Draft revisions")):
+            next(widget for widget in app.radio if widget.label == "Ad Content").set_value(view).run()
+            assert not app.exception and not app.error
+            assert app.title[0].value == title
+        save = next(button for button in app.button if button.label == "Save draft")
+        assert not save.disabled
+        save.click().run()
+        assert app.success[0].value == "Draft saved."
+
+        app.sidebar.radio[0].set_value("Organic Marketing").run()
+        assert app.title[0].value == "Organic Marketing"
+        assert "Facebook analytics" in [tab.label for tab in app.tabs]
+        next(widget for widget in app.radio if widget.label == "Organic channel").set_value("Shopify Blog").run()
+        assert not app.exception and not app.error
+        assert "UTM Link Builder" in [tab.label for tab in app.tabs]
+        app.sidebar.radio[0].set_value("Reports & AI Insights").run()
+        assert app.title[0].value == "Reports & AI Insights"
+        app.sidebar.checkbox[0].check().run()
+        assert not app.exception and not app.error
+        assert app.title[0].value == "Connections & Sync"
     finally:
         for server in servers:
             if server.poll() is None:

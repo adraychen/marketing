@@ -22,7 +22,7 @@ Run these in two terminals from the same directory.
 .\.venv\Scripts\python.exe -m streamlit run frontend/app.py --server.address 127.0.0.1
 ```
 
-Open [the local dashboard](http://127.0.0.1:8501). Select either synthetic ad account and explore Dashboard, Campaigns, Ad Content, and Connections & Sync. Keywords and Drafts are under Ad Content. Demo mode requires no credentials. Its revisions persist in the SQLite file named by `DEMO_DB`; use it as a local, shared sandbox.
+Open [the local dashboard](http://127.0.0.1:8501). Start at Overview and open Paid Advertising → Google Ads for the synthetic account dashboard, Weekly Review, Campaigns, and Ad Content. Keywords and Drafts are under Ad Content. Facebook and Shopify Blog are under Organic Marketing. Connections & Sync is in the sidebar. Demo mode requires no credentials. Its revisions persist in the SQLite file named by `DEMO_DB`; use it as a local, shared sandbox.
 
 ## Configure Supabase
 
@@ -122,6 +122,18 @@ Facebook and Shopify run status is recorded per source and organization. To chan
 **No data returned** means a successful run returned zero records for that data source. **Permission needed** means the provider denied access to some or all requested data. Check **Details** for the provider message and **Records** for what was saved.
 
 For TikTok Ads, set TIKTOK_ADS_ORGANIZATION_ID, TIKTOK_ADS_ADVERTISER_ID, and TIKTOK_ADS_ACCESS_TOKEN on the FastAPI backend. Each backend deployment supports one configured TikTok advertiser for the specified organization. Store the access token as a secret with reporting access.
+
+## Marketing Performance overview
+
+Use the overview date range to compare available Google Ads delivery and Shopify article metrics with the previous equal-length period. Account spend stays in its original currency and totals are grouped by currency. Google Ads conversions follow the account's configured actions. GA4 article purchases and revenue describe sessions that began on the article, and tagged Facebook rows may overlap that group. The overview keeps those results separate from canonical Shopify orders and revenue, which are currently unavailable.
+
+Use Organic Marketing → UTM Link Builder to generate a tagged link for an external placement. Select a known item or enter an identifier for new content. Draft links remain in the current session. Use the canonical URL for internal blog links, then publish the tagged link manually where the placement supports clicks. Existing Facebook-to-article associations come from discovered links.
+
+Paid Advertising includes a Meta Ads placeholder and exposes TikTok reporting when configured. Facebook organic sync uses the existing Page token on the content cron. A paid Meta connection will require separate access to the ad account. The current Shopify connector imports articles. Canonical purchase reporting will require separately verified order access, an order eligibility policy, and a deduplicated order-level attribution store. GA4 and Search Console continue using the existing read credentials and content sync job. The content job now requests GA4 product view events, add-to-cart events, and checkout starts for article landing sessions and Facebook-tagged landing sessions. These are event counts. Use GA4 to verify the existing events and campaign dimensions before relying on purchase counts. Rerun the content job to populate the new fields for its refresh window. No additional storefront tag is required by these views.
+
+- **Shopify orders** require an installed app with authorized read access to orders. Confirm the granted scopes before adding an importer. Shopify typically limits order access to the last 60 days unless the app also has approved access to older orders. See the [Shopify Order API](https://shopify.dev/docs/api/admin-graphql/latest/objects/Order).
+- **Meta paid** needs a dedicated, server-side ad-account credential. Grant read access to the intended ad account and verify ads_read with a read-only Insights query before using any metrics. The existing Page credential serves organic content.
+- **Facebook post outcomes** use existing GA4 imports for article links with a content-specific UTM that is unique to the post for that article. Shared or missing tags stay unavailable for post-level reporting. These results are GA4 session outcomes.
 
 ## Tests
 
