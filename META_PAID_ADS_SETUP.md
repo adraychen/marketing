@@ -51,3 +51,14 @@ Check the dashboard at **Paid Advertising > Meta Ads**, the **Overview / All Pai
 Automated tests cover GET-only requests, trusted-host pagination, sanitized permission/expiry/rate-limit errors, exact conversion-category selection, campaign filtering, no deletion on failed imports, and protected API routes. An optional `TEST_DATABASE_URL` test checks repeated imports and tenant RLS in a migrated test database. Real token access and production database execution require the configuration above and are not implied by local tests.
 
 API references: [Meta Marketing API](https://developers.facebook.com/docs/marketing-api/), [Meta official Python SDK account/Insights parameters](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adaccount.py), [creative fields](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adcreative.py).
+
+
+## Diagnose a rejected Meta request
+
+If a paid import fails with a generic request error, deploy the current diagnostic update and run this in the content cron shell:
+
+```text
+python -m backend.content_jobs --diagnose-meta
+```
+
+This dedicated check reads the configured account, full campaign/ad-set/ad/creative field sets, and one completed day of Insights. It does not open a database connection or change Meta assets. It continues after a metadata failure to identify whether Insights is independently accessible. The output identifies request stage, HTTP status, numeric Meta code/subcode, and a rejected field when it can safely match a requested schema field. Raw API messages, tokens, and paging URLs are not printed. Share those diagnostic lines to identify the next fix. An account-only access check cannot establish that every requested metadata field or Insights query is supported. The command exits 1 when any probe fails.

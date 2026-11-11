@@ -321,6 +321,7 @@ def main():
     parser = argparse.ArgumentParser(description="Discover and refresh content marketing data.")
     parser.add_argument("--backfill", action="store_true", help="Refresh the entire configured lookback window.")
     parser.add_argument("--diagnose", action="store_true", help="Probe configured content sources without writing data.")
+    parser.add_argument("--diagnose-meta", action="store_true", help="Probe all paid Meta request field sets, read-only, without a database connection.")
     args = parser.parse_args()
     try:
         org = str(UUID(environment("CONTENT_ORGANIZATION_ID")))
@@ -329,6 +330,22 @@ def main():
             raise ValueError
     except ValueError:
         parser.exit(2, "Set live mode, a valid CONTENT_ORGANIZATION_ID and a 14–365 day backfill window.\n")
+
+    if args.diagnose_meta:
+        from backend.connectors.meta_ads import configuration, diagnose as diagnose_paid
+        try:
+            config = configuration(org)
+            if not config:
+                parser.exit(2,"Configure META_ADS_ORGANIZATION_ID, META_ADS_ACCOUNT_ID and META_ADS_ACCESS_TOKEN.\n")
+            with httpx.Client(timeout=30,follow_redirects=False) as client:
+                results = diagnose_paid(client,config)
+            for row in results:
+                print(f"meta_ads/{row['request']}: {row['status']}. "
+                      + (row.get("details") or f"{row['records']} records."),flush=True)
+            return int(any(row['status']=='failed' for row in results))
+        except (MetaAdsError,httpx.HTTPError,ValueError) as exc:
+            print(str(exc) if isinstance(exc,MetaAdsError) else "Meta paid diagnostic request failed; no data was changed.",flush=True)
+            return 1
 
     shop = environment("CONTENT_SHOPIFY_SHOP")
     storefront = environment("CONTENT_STOREFRONT_URL", "https://okoostore.com")

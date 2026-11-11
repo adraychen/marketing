@@ -169,3 +169,52 @@ def test_paid_postgres_repeat_import_and_rls():
     finally:
         conn.rollback()
         conn.close()
+
+
+def test_invalid_field_diagnostic_reports_allowlisted_field_not_message(monkeypatch):
+    config=configure(monkeypatch)
+    message='(#100) Tried accessing nonexisting field (bid_strategy) on node type (Campaign). super-secret-token https://private.example'
+    with httpx.Client(transport=httpx.MockTransport(lambda req:httpx.Response(400,json={'error':{'code':100,'error_subcode':123,'message':message}}))) as client:
+        with pytest.raises(connector.MetaAdsError) as failure:
+            connector.Reader(client,config).get('act_2966294073730346/campaigns',connector.resource_params('campaigns'))
+    text=str(failure.value)
+    assert 'request=campaigns' in text and 'HTTP=400' in text and 'code=100' in text
+    assert 'error_subcode=123' in text and 'rejected_field=bid_strategy' in text
+    assert 'super-secret-token' not in text and 'private.example' not in text and 'node type' not in text
+    context=connector.error_context('act_1/insights',{'fields':'spend'},400,{'code':100,'message':'super_secret_token is not valid for fields'})
+    assert 'super_secret_token' not in context
+
+
+def test_read_only_diagnosis_continues_after_metadata_failure(monkeypatch):
+    config=configure(monkeypatch)
+    requests=[]
+    def transport(request):
+        requests.append(request)
+        assert request.method=='GET'
+        assert request.url.host=='graph.facebook.com'
+        if request.url.path.endswith('/adsets'):
+            return httpx.Response(400,json={'error':{'code':100,'message':'invalid effective_status, secret super-secret-token'}})
+        if request.url.path.endswith(('/campaigns','/ads','/insights')):
+            return httpx.Response(200,json={'data':[]})
+        return httpx.Response(200,json={'account_id':'2966294073730346','timezone_name':'America/Toronto'})
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        results=connector.diagnose(client,config)
+    assert [row['request'] for row in results]==['ad account','campaigns','adsets','ads','insights']
+    assert results[2]['status']=='failed' and results[-1]['status']=='succeeded'
+    assert 'parameter=effective_status' in results[2]['details']
+    assert 'super-secret-token' not in str(results)
+
+
+def test_meta_diagnostic_cli_never_opens_database(monkeypatch):
+    from backend import content_jobs
+    from unittest.mock import Mock
+    monkeypatch.setenv('CONTENT_ORGANIZATION_ID','c8283a0b-5714-428d-92de-6aed66b245ad')
+    monkeypatch.setenv('META_ADS_ORGANIZATION_ID','c8283a0b-5714-428d-92de-6aed66b245ad')
+    monkeypatch.setenv('META_ADS_ACCOUNT_ID','2966294073730346')
+    monkeypatch.setenv('META_ADS_ACCESS_TOKEN','super-secret-token')
+    monkeypatch.setenv('CONTENT_BACKFILL_DAYS','90')
+    monkeypatch.setattr(content_jobs,'MODE','live')
+    monkeypatch.setattr('sys.argv',['backend.content_jobs','--diagnose-meta'])
+    monkeypatch.setattr(content_jobs,'database',Mock(side_effect=AssertionError('must not open database')))
+    monkeypatch.setattr(connector,'diagnose',lambda *args:[{'request':'insights','status':'failed','details':'request=insights; code=100'}])
+    assert content_jobs.main()==1
