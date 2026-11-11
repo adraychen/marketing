@@ -218,3 +218,43 @@ def test_meta_diagnostic_cli_never_opens_database(monkeypatch):
     monkeypatch.setattr(content_jobs,'database',Mock(side_effect=AssertionError('must not open database')))
     monkeypatch.setattr(connector,'diagnose',lambda *args:[{'request':'insights','status':'failed','details':'request=insights; code=100'}])
     assert content_jobs.main()==1
+
+
+@pytest.mark.parametrize('kind',['campaigns','adsets','ads'])
+def test_metadata_filters_exclude_deleted_but_include_archived(kind):
+    import json
+    statuses=json.loads(connector.resource_params(kind)['effective_status'])
+    assert 'DELETED' not in statuses
+    assert {'ACTIVE','PAUSED','ARCHIVED'} <= set(statuses)
+
+
+def test_meta_1815001_regression_on_all_metadata_edges(monkeypatch):
+    import json
+    config=configure(monkeypatch)
+    seen=[]
+    def transport(request):
+        edge=request.url.path.rsplit('/',1)[-1]
+        if edge in connector.RESOURCE_FIELDS:
+            statuses=json.loads(request.url.params['effective_status'])
+            seen.append(edge)
+            if 'DELETED' in statuses:
+                return httpx.Response(400,json={'error':{'code':100,'error_subcode':1815001,'message':'Invalid parameter'}})
+            return httpx.Response(200,json={'data':[{'id':{'campaigns':'c1','adsets':'g1','ads':'a1'}[edge]}]})
+        if edge=='insights':
+            assert 'effective_status' not in request.url.params
+            return httpx.Response(200,json={'data':[]})
+        return httpx.Response(200,json={'account_id':config['account_id'],'timezone_name':'America/Toronto'})
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        account,resources,metrics=connector.fetch(client,config,date(2026,11,1),date(2026,11,10))
+    assert seen==['campaigns','adsets','ads']
+    assert all(len(rows)==1 for rows in resources.values())
+    assert metrics==[]
+
+
+def test_deleted_object_error_is_actionable_without_raw_message(monkeypatch):
+    config=configure(monkeypatch)
+    with httpx.Client(transport=httpx.MockTransport(lambda req:httpx.Response(400,json={
+            'error':{'code':100,'error_subcode':1815001,'message':'super-secret-token'}}))) as client:
+        with pytest.raises(connector.MetaAdsError,match='excludes DELETED') as failure:
+            connector.Reader(client,config).get('act_2966294073730346/campaigns',connector.resource_params('campaigns'))
+    assert 'super-secret-token' not in str(failure.value)

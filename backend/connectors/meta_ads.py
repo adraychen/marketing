@@ -16,7 +16,10 @@ RESOURCE_FIELDS = {
     "adsets": "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,billing_event,optimization_goal,start_time,end_time,attribution_spec,targeting,created_time,updated_time",
     "ads": "id,name,campaign_id,adset_id,status,effective_status,created_time,updated_time,creative{id,name,title,body,call_to_action_type,object_story_id,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags,link_url,image_url,video_id,thumbnail_url}"
 }
-BASE_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "IN_PROCESS", "WITH_ISSUES"]
+# DELETED is a valid object state but is rejected as a discovery filter by
+# these account edges (Meta subcode 1815001). Preserve historical Insights
+# separately rather than requesting deleted metadata through list endpoints.
+BASE_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED", "IN_PROCESS", "WITH_ISSUES"]
 RESOURCE_STATUSES = {
     "campaigns": BASE_STATUSES,
     "adsets": BASE_STATUSES + ["CAMPAIGN_PAUSED"],
@@ -105,6 +108,8 @@ class Reader:
         if error or not response.is_success:
             context = error_context(path, params, response.status_code, error)
             code = error.get("code")
+            if code == 100 and error.get("error_subcode") == 1815001:
+                raise MetaAdsError("Meta rejected deleted-object discovery. Check that the deployed connector excludes DELETED from metadata filters." + context)
             if code == 190 or response.status_code == 401:
                 raise MetaAdsError("Meta token expired or invalid. Renew the paid-ads token in Render." + context)
             if code in (10, 200, 294) or response.status_code == 403:

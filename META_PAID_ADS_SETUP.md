@@ -62,3 +62,8 @@ python -m backend.content_jobs --diagnose-meta
 ```
 
 This dedicated check reads the configured account, full campaign/ad-set/ad/creative field sets, and one completed day of Insights. It does not open a database connection or change Meta assets. It continues after a metadata failure to identify whether Insights is independently accessible. The output identifies request stage, HTTP status, numeric Meta code/subcode, and a rejected field when it can safely match a requested schema field. Raw API messages, tokens, and paging URLs are not printed. Share those diagnostic lines to identify the next fix. An account-only access check cannot establish that every requested metadata field or Insights query is supported. The command exits 1 when any probe fails.
+
+
+### Metadata failures with subcode 1815001
+
+The connector excludes `DELETED` from the campaign, ad-set, and ad account-list status filters. The previous filter included it on all three edges, producing the observed HTTP 400 / code 100 / subcode 1815001 failures. Archived, paused, and active resources remain requested. Historical Insights are fetched separately without that filter, and inaccessible metadata stays labeled unavailable. After deploying this correction, rerun `--diagnose-meta` to verify the live metadata queries, then run the normal sync. A successful one-day Insights probe with zero rows does not establish zero delivery across the full import period. Token settings and database schema do not change for this fix.
