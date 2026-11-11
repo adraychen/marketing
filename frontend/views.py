@@ -429,8 +429,12 @@ def content_sync(base, platform):
 def settings(mode, org, base):
     st.title("Connections & Sync")
     st.caption(f"{org['name']} · {pretty(org['role'])}")
-    platform = st.radio("Platform", ("Google Ads", "Facebook", "Shopify", "TikTok Ads"),
+    platform = st.radio("Platform", ("Google Ads", "Facebook", "Meta Paid Ads", "Shopify", "TikTok Ads"),
                         horizontal=True, key=f"sync-platform:{base}")
+    if platform == "Meta Paid Ads":
+        from frontend.meta_ads import sync_panel
+        sync_panel(base,mode,org["role"])
+        return
     if platform in CONTENT_SYNC_SOURCES:
         content_sync(base, platform)
         return

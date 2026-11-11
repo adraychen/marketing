@@ -6,6 +6,7 @@ import streamlit as st
 from backend.metrics import previous_period, summarize
 from frontend.client import APIError, call
 from frontend.commerce import show_commerce
+from frontend.meta_ads import load_report as load_meta_report, totals as meta_totals
 from frontend.views import coverage, number, period_rows, table
 
 
@@ -53,7 +54,23 @@ def show_marketing_overview(base, mode, *, paid_only=False):
     rows = list(google_rows(base, start, end))
     if not rows:
         rows.append({"Platform": "Google Ads", "Status": "No account connected"})
-    rows.append({"Platform": "Meta Ads", "Status": "Paid reporting not connected"})
+    try:
+        meta = load_meta_report(base,start,end)
+        if meta["account"]:
+            account = meta["account"]
+            metrics = meta_totals(meta)
+            prior = meta_totals(load_meta_report(base,prior_start,prior_end))
+            rows.append({"Platform":"Meta Ads", "Account":account["data"]["name"],
+                         "Currency":account["data"]["currency"],
+                         "Status":"Stale import" if meta["stale"] else "Imported" if meta["coverage"] else "Partial coverage",
+                         "Spend":metrics["spend"],"Previous spend":prior["spend"],
+                         "Impressions":metrics["impressions"],"Clicks":metrics["clicks"],
+                         "Previous clicks":prior["clicks"],"Meta website purchases":metrics["website_purchases"],
+                         "Meta website purchase value":metrics["website_purchase_value"],"Meta website ROAS":metrics["website_roas"]})
+        else:
+            rows.append({"Platform":"Meta Ads","Status":"No successful paid import yet"})
+    except APIError as exc:
+        rows.append({"Platform":"Meta Ads","Status":str(exc)})
     if mode == "live":
         try:
             tiktok = call(f"{base}/tiktok-ads/status")["configured"]

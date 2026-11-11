@@ -9,10 +9,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from backend import commerce, content_repository, demo, facebook_analytics, repositories as repo
+from backend import commerce, content_repository, demo, facebook_analytics, meta_ads, repositories as repo
 from backend.auth import Login, Refresh, current_user, session
 from backend.config import MODE
 from backend.connectors import tiktok
+from backend.connectors.meta_ads import MetaAdsError
 from backend.connectors.google_ads import GoogleAdsError
 from backend.jobs import SyncBusy, configured_org, connector, run_sync
 from backend.metrics import previous_period
@@ -146,6 +147,52 @@ def delete_facebook_observation(org: str, observation_id: UUID, _editor=Depends(
     if not facebook_analytics.delete_manual(org, str(observation_id)):
         raise HTTPException(404, "Manual observation unavailable.")
     return {"deleted": True}
+
+
+@app.get("/orgs/{org}/meta-ads/status")
+def meta_ads_status(org: str, _member=Depends(member)):
+    if MODE == "demo":
+        return {"configured":False,"account_id":None,"accounts":[],"runs":[],"token_expires_at":None,
+                "expiry_source":"Unknown", "token_expiring":False, "token_expired":False}
+    try:
+        return {**meta_ads.status(org), "schema_ready":True}
+    except UndefinedTable:
+        from backend.connectors.meta_ads import configuration
+        config = configuration(org)
+        return {"configured":bool(config), "account_id":config["account_id"] if config else None,
+                "schema_ready":False,"accounts":[],"runs":[],"token_expires_at":None,
+                "expiry_source":"Apply the Meta paid-ads migration", "token_expiring":False, "token_expired":False}
+    except MetaAdsError as exc:
+        raise HTTPException(503,str(exc)) from None
+
+
+@app.get("/orgs/{org}/meta-ads/report")
+def meta_ads_report(org: str, start: date, end: date, _member=Depends(member)):
+    if start>end or end-start>timedelta(days=365):
+        raise HTTPException(422,"Choose a valid Meta date range of up to 366 days.")
+    if MODE == "demo":
+        return meta_ads.empty_report()
+    try:
+        return meta_ads.report(org,start,end)
+    except UndefinedTable:
+        raise HTTPException(503,"Apply 20261111000200_meta_paid_ads.sql before importing Meta paid ads.") from None
+    except MetaAdsError as exc:
+        raise HTTPException(503,str(exc)) from None
+
+
+@app.post("/orgs/{org}/meta-ads/sync")
+def meta_ads_sync(org: str, membership=Depends(member)):
+    if MODE != "live" or membership["role"] != "admin":
+        raise HTTPException(403,"An organization admin must synchronize Meta paid ads.")
+    try:
+        days = int(os.getenv("META_ADS_LOOKBACK_DAYS","90"))
+        return {"counts":meta_ads.run_sync(org,days)}
+    except meta_ads.SyncBusy:
+        raise HTTPException(409,"A Meta paid-ads sync is already running.") from None
+    except UndefinedTable:
+        raise HTTPException(503,"Apply 20261111000200_meta_paid_ads.sql before importing Meta paid ads.") from None
+    except (MetaAdsError,ValueError) as exc:
+        raise HTTPException(502,str(exc) if isinstance(exc,MetaAdsError) else "Check META_ADS_LOOKBACK_DAYS (1-365).") from None
 
 
 @app.get("/orgs/{org}/tiktok-ads/status")

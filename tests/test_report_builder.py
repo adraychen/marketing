@@ -57,3 +57,15 @@ def test_google_selection_and_optional_flags_reach_export(monkeypatch):
     assert args[7] is True and args[8] is True
     assert kw['selected']==['c1'] and kw['include_ai'] is False
     assert args[6]==date(2026,11,10)
+
+
+def test_meta_paid_export_is_separate_and_honors_campaign_choices(monkeypatch):
+    seen=[]
+    monkeypatch.setattr(builder,'add_meta_report',lambda *a:seen.append(a))
+    monkeypatch.setattr(builder,'call',lambda path:{'runs':[]})
+    report=Report()
+    builder.generate_period(report,'/orgs/o',{'items':[],'campaigns':[]},[],['Facebook Paid Ads'],
+        {'meta':['c1']},{'start':'2026-11-04','end':'2026-11-10'},date(2026,11,4),date(2026,11,10),
+        True,True,False,False,False,[])
+    assert seen[0][-1]==['c1']
+    assert 'Meta paid sync history' not in [name for name,rows in report.sections]

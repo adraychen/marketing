@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from psycopg2.extras import Json
 
-from backend import commerce, content_repository as repo
+from backend import commerce, meta_ads, content_repository as repo
+from backend.connectors.meta_ads import MetaAdsError
 from psycopg2.errors import UndefinedTable
 from backend.facebook_analytics import collect_page_metrics, unsupported_page_metrics, write_page_metrics
 from backend.config import MODE
@@ -275,6 +276,18 @@ def diagnose(client, org, shop, page, token, version):
                   f"returned {', '.join(sorted(metrics)) or 'no metrics'}; availability {availability}")
     else:
         print("Facebook: Page ID or token not configured.")
+    if environment("META_ADS_ORGANIZATION_ID") == org:
+        from backend.connectors.meta_ads import Reader, configuration
+        try:
+            config = configuration(org)
+            if config:
+                account = Reader(client,config).get(f"act_{config['account_id']}",{"fields":"account_id,name,currency,timezone_name"})
+                print(f"Meta paid account access verified: {account.get('account_id') == config['account_id']}")
+                print("Meta paid token expiry:",config['token_expires_at'] or 'Unknown (check Meta debugger)')
+            else:
+                print("Meta paid: configuration incomplete.")
+        except (MetaAdsError,httpx.HTTPError,KeyError,TypeError,ValueError) as exc:
+            print("Meta paid:",str(exc) if isinstance(exc,MetaAdsError) else "Account access check failed.")
     return 0
 
 
@@ -367,6 +380,19 @@ def main():
         failed |= post_insights(client, org, page, meta_token, version)
         failed |= page_insights(client, org, page, meta_token, version, days if args.backfill else 28)
         failed |= commerce_sync(client, org, shop, shop_token, shop_client_id, shop_client_secret, days)
+    if environment("META_ADS_ORGANIZATION_ID") == org:
+        try:
+            counts = meta_ads.run_sync(org,int(environment("META_ADS_LOOKBACK_DAYS","90")))
+            print(f"meta_ads: succeeded. {counts}",flush=True)
+        except meta_ads.SyncBusy:
+            print("meta_ads: skipped. A paid-ads sync is already running.",flush=True)
+        except UndefinedTable:
+            print("meta_ads: failed. Apply 20261111000200_meta_paid_ads.sql.",flush=True)
+            failed = True
+        except (MetaAdsError,ValueError) as exc:
+            text = str(exc) if isinstance(exc,MetaAdsError) else "Check META_ADS_LOOKBACK_DAYS (1-365)."
+            print(f"meta_ads: failed. {text}",flush=True)
+            failed = True
     return int(failed)
 
 

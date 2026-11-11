@@ -15,6 +15,7 @@ from frontend.client import APIError, call, clear_session, store_session
 from frontend.content_marketing import show_content_marketing
 from frontend.marketing_overview import show_marketing_overview
 from frontend.reports import show_reports
+from frontend.meta_ads import show_meta_ads
 from frontend.tiktok_ads import show_tiktok_ads
 from frontend.weekly_review import show_weekly_review
 from frontend.views import dashboard, campaigns, content, keywords, drafts, select_ad_account, settings
@@ -95,8 +96,7 @@ def app():
             show_marketing_overview(base, mode, paid_only=True)
             return
         if platform == "Meta Ads":
-            st.title("Meta Ads")
-            st.info("Meta paid reporting is not connected. Facebook Page and post analytics are under Organic Marketing.")
+            show_meta_ads(base, mode)
             return
         if platform == "TikTok Ads":
             show_tiktok_ads(base)

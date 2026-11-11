@@ -171,3 +171,8 @@ Reports & AI Insights uses one scope for selection, preview, and export. The rep
 5. Review dates, sources, selected item counts, optional details, and warnings, then Generate report. Download Markdown or a ZIP with full CSV tables. Changing selections invalidates the old download.
 
 Google campaign descendants, performance, and drafts are filtered by selection. Only selected organic items are retrieved. Facebook Page-wide totals are omitted for post subsets. Storewide Shopify/GA4 outcomes remain a separate storewide selection. Previous-period sections are labeled explicitly. Detailed sync history can be excluded, but coverage and missing-value warnings remain.
+
+
+## Meta paid advertising
+
+Paid Meta reporting is implemented as a separate read-only integration from organic Page Insights. Follow [META_PAID_ADS_SETUP.md](META_PAID_ADS_SETUP.md) for the migration, backend/cron environment variables, token expiry, verification, and data definitions. The existing content cron imports the configured paid account daily. Use Connections & Sync > Meta Paid Ads for manual sync, Paid Advertising > Meta Ads for campaign/creative review, and Facebook Paid Ads in the report builder. No live credential or production migration is applied by these code changes.
