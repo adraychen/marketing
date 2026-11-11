@@ -118,11 +118,14 @@ def edit_manual(route, data, items, start, end):
             st.rerun()
     prefix = f"facebook-manual-{route}-{selected}"
     pages = data["pages"]
-    page = st.selectbox("Facebook Page", pages, index=pages.index(row["page_id"]) if row else 0, key=prefix + "-page")
+    page_id = row.get("page_id")
+    page = st.selectbox("Facebook Page", pages, index=pages.index(page_id) if page_id in pages else 0,
+                        key=prefix + "-page")
     posts = {item["id"]: item["title"] for item in items
              if item["source"] == "facebook" and item.get("source_account") == page}
     options = [None, *posts]
-    item = st.selectbox("Scope", options, index=options.index(row["item_id"]) if row.get("item_id") in options else 0,
+    item_id = row.get("item_id")
+    item = st.selectbox("Scope", options, index=options.index(item_id) if item_id in options else 0,
                         format_func=lambda key: posts[key] if key else "Facebook Page", key=prefix + "-scope")
     metrics = CONTENT_MANUAL if item else PAGE_MANUAL
     names = list(metrics)

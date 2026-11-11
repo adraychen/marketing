@@ -5,6 +5,7 @@ import streamlit as st
 
 from backend.metrics import previous_period, summarize
 from frontend.client import APIError, call
+from frontend.commerce import show_commerce
 from frontend.views import coverage, number, period_rows, table
 
 
@@ -46,11 +47,7 @@ def show_marketing_overview(base, mode, *, paid_only=False):
     st.caption(f"{start} to {end} · Previous period {prior_start} to {prior_end}. "
                "Google Ads dates follow each account's reporting time zone.")
     if not paid_only:
-        for column, label in zip(st.columns(3), ("Shopify orders", "Shopify revenue", "Website sessions")):
-            column.metric(label, "Not available")
-        for column, label in zip(st.columns(2), ("Attributed Shopify purchases", "Attributed Shopify revenue")):
-            column.metric(label, "Not available")
-        st.caption("Storewide order and session totals and order-level attribution are not configured.")
+        show_commerce(base, start, end, prior_start, prior_end)
 
     st.subheader("Paid advertising")
     rows = list(google_rows(base, start, end))

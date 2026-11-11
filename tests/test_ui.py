@@ -61,7 +61,7 @@ def test_demo_launch_and_all_pages(tmp_path, monkeypatch):
         app = AppTest.from_file(str(root / "frontend" / "app.py"), default_timeout=20).run()
         assert not app.exception and not app.error
         assert app.title[0].value == "Marketing Performance"
-        assert any(metric.label == "Shopify orders" and metric.value == "Not available" for metric in app.metric)
+        assert any(metric.label == "Shopify paid orders" and metric.value == "Not available" for metric in app.metric)
         app.sidebar.radio[0].set_value("Paid Advertising").run()
         assert app.title[0].value == "All Paid"
         next(widget for widget in app.radio if widget.label == "Paid platform").set_value("Meta Ads").run()
@@ -93,6 +93,22 @@ def test_demo_launch_and_all_pages(tmp_path, monkeypatch):
         assert "UTM Link Builder" in [tab.label for tab in app.tabs]
         app.sidebar.radio[0].set_value("Reports & AI Insights").run()
         assert app.title[0].value == "Reports & AI Insights"
+        assert not app.exception and not app.error
+        assert 'Organic content campaign' not in [widget.label for widget in app.selectbox]
+        assert not next(widget for widget in app.checkbox if widget.label == 'TikTok Ads').value
+        next(widget for widget in app.radio if widget.label == 'Report type').set_value('Weekly report').run()
+        assert 'Report date range' not in [widget.label for widget in app.date_input]
+        assert 'Week ending' in [widget.label for widget in app.date_input]
+        next(widget for widget in app.checkbox if widget.label == 'Compare with previous period').uncheck().run()
+        next(widget for widget in app.checkbox if widget.label == 'Include AI interpretations and recommendations').uncheck().run()
+        next(widget for widget in app.checkbox if widget.label == 'Include sync status and data availability details').uncheck().run()
+        next(button for button in app.button if button.label == 'Generate report').click().run(timeout=30)
+        assert not app.exception and not app.error
+        saved = app.session_state['report:demo:generated']
+        document = saved[1][0].decode('utf-8')
+        assert 'Google Ads budget and bidding' in document
+        assert 'Google Ads sync history' not in document
+        assert 'Existing AI interpretations' not in document
         app.sidebar.checkbox[0].check().run()
         assert not app.exception and not app.error
         assert app.title[0].value == "Connections & Sync"

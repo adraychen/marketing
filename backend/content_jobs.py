@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from psycopg2.extras import Json
 
-from backend import content_repository as repo
+from backend import commerce, content_repository as repo
+from psycopg2.errors import UndefinedTable
 from backend.facebook_analytics import collect_page_metrics, unsupported_page_metrics, write_page_metrics
 from backend.config import MODE
 from backend.connectors.content import (
@@ -277,6 +278,32 @@ def diagnose(client, org, shop, page, token, version):
     return 0
 
 
+def commerce_sync(client, org, shop, token, client_id, client_secret, days):
+    failed = False
+    if not environment("COMMERCE_SYNC_ENABLED").lower() in {"1", "true", "yes"}:
+        return False
+    for source in ("shopify_orders", "ga4_store"):
+        try:
+            if source == "shopify_orders":
+                if not shop or not (token or client_id and client_secret):
+                    failed |= finish(org, source, "skipped", message="Shopify store or credentials are missing.")
+                    continue
+                credential = token or shopify_token(client, shop, client_id, client_secret)
+                count = commerce.import_orders(client, org, shop, credential, days)
+            else:
+                prop = environment("CONTENT_GA4_PROPERTY_ID")
+                if not re.fullmatch(r"[0-9]+", prop):
+                    failed |= finish(org, source, "skipped", message="Set the numeric GA4 property ID.")
+                    continue
+                count = commerce.import_sessions(client, org, prop, environment("CONTENT_GA4_TIMEZONE", "America/Toronto"), days)
+            finish(org, source, "succeeded", count)
+        except UndefinedTable:
+            failed |= finish(org, source, "failed", message="Apply the commerce metrics migration before enabling commerce sync.")
+        except SOURCE_ERRORS as exc:
+            failed |= finish(org, source, "failed", message=message(exc))
+    return failed
+
+
 def main():
     parser = argparse.ArgumentParser(description="Discover and refresh content marketing data.")
     parser.add_argument("--backfill", action="store_true", help="Refresh the entire configured lookback window.")
@@ -339,6 +366,7 @@ def main():
         failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
         failed |= post_insights(client, org, page, meta_token, version)
         failed |= page_insights(client, org, page, meta_token, version, days if args.backfill else 28)
+        failed |= commerce_sync(client, org, shop, shop_token, shop_client_id, shop_client_secret, days)
     return int(failed)
 
 

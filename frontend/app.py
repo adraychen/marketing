@@ -106,10 +106,10 @@ def app():
         if nav == "Ad Content":
             view = st.radio("Ad Content", tuple(AD_CONTENT_VIEWS), horizontal=True, key=f"ad-content:{org_id}")
 
-    account = select_ad_account(org_id, base)
     if nav == "Reports & AI Insights":
-        show_reports(org, base, account, mode)
+        show_reports(org, base, None, mode)
         return
+    account = select_ad_account(org_id, base)
     if account is None:
         st.title(nav)
         st.info("Connect a Google Ads account in Connections & Sync to get started.")

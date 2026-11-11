@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from backend import content_repository, demo, facebook_analytics, repositories as repo
+from backend import commerce, content_repository, demo, facebook_analytics, repositories as repo
 from backend.auth import Login, Refresh, current_user, session
 from backend.config import MODE
 from backend.connectors import tiktok
@@ -60,6 +60,20 @@ def member(org: str, user=Depends(current_user)):
     if row is None:
         raise HTTPException(404, "Organization unavailable.")
     return row
+
+
+@app.get("/orgs/{org}/commerce")
+def commerce_report(org: str, start: date, end: date, _member=Depends(member)):
+    if start > end or end - start > timedelta(days=365):
+        raise HTTPException(422, "Choose a valid date range of up to 366 days.")
+    if MODE == "demo":
+        return {"orders": [], "ga4": [], "coverage": [], "policy": commerce.POLICY,
+                "attribution_model": commerce.ATTRIBUTION}
+    try:
+        result = commerce.summary(org, start, end)
+    except UndefinedTable:
+        raise HTTPException(503, "Apply the commerce metrics migration and run commerce sync.") from None
+    return result
 
 
 @app.get("/orgs/{org}/content")

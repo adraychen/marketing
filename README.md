@@ -142,3 +142,32 @@ Paid Advertising includes a Meta Ads placeholder and exposes TikTok reporting wh
 ```
 
 The default suite uses mocked external services and a temporary SQLite database. Set `TEST_LOCAL_UI=1` to start both demo servers on temporary loopback ports and exercise the six Streamlit pages. Set `TEST_DATABASE_URL` to a migrated disposable Supabase database owner URI for the PostgreSQL/RLS test. For the live connectivity test, configure Google credentials and set `TEST_LIVE_GOOGLE_ADS=1`. That test discovers accounts and reads campaign metadata.
+
+
+## Commerce outcomes and report controls
+
+Apply `supabase/migrations/20261111000100_commerce_metrics.sql` to the same Supabase database used by the API and content cron. All new tables use the `marketing_` prefix and tenant-scoped read policies. Deploy the backend, frontend, and cron code together.
+
+On the existing Shopify app, verify installed `read_orders` access before enabling order imports. Article read access alone does not grant order access. The connector reuses `CONTENT_SHOPIFY_ACCESS_TOKEN` or the existing client credentials. It does not change permissions. Shopify may impose additional restrictions on customer journey fields. No customer names, addresses, or emails are imported.
+
+On the Render content cron, set `COMMERCE_SYNC_ENABLED=true`. Reuse its existing Shopify and Google service account configuration, numeric `CONTENT_GA4_PROPERTY_ID`, and `CONTENT_GA4_TIMEZONE` matching the GA4 property. Run `python -m backend.content_jobs`. Look for `shopify_orders: succeeded` and `ga4_store: succeeded`. Failures are recorded separately in Connections & Sync and commerce coverage. Apply the migration before enabling the flag.
+
+The order import refreshes at most the last 59 completed days on every run, within default Shopify order access. Orders are grouped by creation date in the store timezone. Eligible orders are non-test, non-canceled, currently PAID or PARTIALLY_REFUNDED. Fully refunded orders are excluded. Revenue uses Shopify current total shop money, including tax and shipping adjustments, and stays in the original currency. This is not a lifetime sales or payment-date accounting report. Older orders are retained but dates outside the latest verified window remain unavailable.
+
+Order attribution uses Shopify's last recorded visit only when its journey is ready and explicit UTM source and medium are present. It does not claim last non-direct attribution. Missing evidence remains unattributed. Google Ads conversion totals, GA4 purchases, and Shopify orders are separate measures and must not be added together. GA4 ecommerce tracking must be verified independently even when sessions import successfully.
+
+Overview and exports show zeros only for successfully imported, fully covered dates. Missing coverage remains Not available. Imports over 48 hours old are flagged. GA4 storewide rows include sessions, product views, add-to-carts, checkouts, purchases, and purchase revenue by session source, medium, and campaign. Thresholded or incomplete reports preserve the previous import.
+
+
+
+## Report builder selection flow
+
+Reports & AI Insights uses one scope for selection, preview, and export. The report UI requires no new database migration or credentials.
+
+1. Choose Custom period with inclusive dates, or Weekly report with one week-ending date. A week ending November 10 covers November 4-10. Optional comparison covers the preceding equal-length period, October 28-November 3. There is no independent Weekly Review date.
+2. Select source checkboxes: Google Ads, Facebook Organic, Facebook Paid Ads, Shopify Blog, Shopify Store Results, and TikTok Ads. All remain visible with status. Facebook paid and TikTok start unchecked. Selected unavailable sources generate warnings rather than zeros.
+3. Select campaign and content checkboxes grouped by source and Google Ads account. Every discovered item starts selected. Each group has Select all / Clear all. Turning off a source excludes its items while retaining their checkbox state. Reports cover all connected Google accounts without the old sidebar account selector. TikTok lists campaigns only when its configured connection returns data for the dates.
+4. Only three optional details remain: saved ad drafts, AI interpretations and recommendations, and sync status/data availability details. Available performance, settings, search, and creative/SEO metadata are automatic. Saved drafts are Google Ads revisions where supported. Exporting uses existing matching weekly AI results, does not request new AI analysis, and flags unsupported scopes. Account-wide AI results are excluded for campaign subsets.
+5. Review dates, sources, selected item counts, optional details, and warnings, then Generate report. Download Markdown or a ZIP with full CSV tables. Changing selections invalidates the old download.
+
+Google campaign descendants, performance, and drafts are filtered by selection. Only selected organic items are retrieved. Facebook Page-wide totals are omitted for post subsets. Storewide Shopify/GA4 outcomes remain a separate storewide selection. Previous-period sections are labeled explicitly. Detailed sync history can be excluded, but coverage and missing-value warnings remain.

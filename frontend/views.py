@@ -383,7 +383,8 @@ CONTENT_SYNC_SOURCES = {
                               "facebook_page_insights": "Page insights"}),
     "Shopify": ("shopify", {"shopify": "Published articles", "ga4": "GA4 article performance",
                            "ga4_traffic": "GA4 traffic sources", "search_console": "Search performance",
-                           "search_console_inspection": "Search indexing"}),
+                           "search_console_inspection": "Search indexing",
+                           "shopify_orders": "Shopify orders and UTM attribution", "ga4_store": "Storewide GA4 sessions"}),
 }
 
 

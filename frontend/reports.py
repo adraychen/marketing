@@ -15,6 +15,7 @@ from backend.models import Creative
 from backend.review import MIN_CLICKS, weekly_review
 from backend.validation import validate
 from frontend.client import APIError, call
+from frontend.commerce import load_commerce
 from frontend.content_marketing import GA_LABELS, SOURCE_LABELS, grouped
 from frontend.facebook_analytics import availability_rows, manual_rows, page_rows
 from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
@@ -161,7 +162,7 @@ def fact_checks(settings, first_activity=None):
          "evidence": "The dashboard has no connected source for marketing objectives.",
          "follow_up": "Identify the current approved marketing plan or goal."},
         {"fact": "Has Okoo received any Shopify orders?", "status": "Needs verification",
-         "evidence": "The Shopify sync imports articles. GA4 article-attributed purchases do not establish storewide order history.",
+         "evidence": "Check the commerce coverage and canonical order outcomes sections. Article-session purchases alone do not establish storewide order history.",
          "follow_up": "Check Shopify Orders or connect a source with read access and sufficient order history."},
         {"fact": "Citizen Collection campaign activation date", "status": "Needs verification",
          "evidence": (f"First recorded activity in the selected period was {first_activity}. Activation date is unverified."
@@ -171,8 +172,23 @@ def fact_checks(settings, first_activity=None):
     return rows
 
 
-def add_ads(report, account, route, params, start, end, week_end, terms, drafts):
+def filter_ads(snapshot, selected):
+    """Keep selected campaigns and descendants, including all performance populations."""
+    allowed = set(selected)
+    for level in ("ad_groups", "ads", "keywords", "search_terms"):
+        allowed.update(row["resource"] for row in snapshot[level] if row.get("parent") in allowed)
+    return {**snapshot,
+            **{level: [row for row in snapshot[level] if row["resource"] in allowed]
+               for level in ("campaigns", "ad_groups", "ads", "keywords", "search_terms")},
+            "performance": [row for row in snapshot["performance"] if row["resource"] in allowed]}
+
+
+def add_ads(report, account, route, params, start, end, week_end, terms, drafts,
+            selected=None, include_ai=True, compare=True):
     snapshot = call(f"{route}/report", params=params)
+    all_campaigns = {row["resource"] for row in snapshot["campaigns"]}
+    if selected is not None:
+        snapshot = filter_ads(snapshot, selected)
     currency = account["currency"]
     report.note("Campaign budgets and bidding strategies reflect the latest Google Ads import. "
                 "Match shared budgets by budget resource. A campaign total budget covers the campaign duration. "
@@ -204,7 +220,7 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
     report.table("Marketing fact verification", checks)
     prior_start, prior_end = previous_period(start, end)
     complete = coverage(account, start, end)
-    comparable = coverage(account, prior_start, end)
+    comparable = compare and coverage(account, prior_start, end)
     report.table("Google Ads coverage", [{
         "account": account["name"], "currency": currency, "timezone": account["timezone"],
         "synced_from": account["synced_from"], "synced_through": account["synced_through"],
@@ -247,10 +263,15 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
     ])
     if drafts:
         report.note("Draft data is the saved revision. Unsaved form edits are excluded.")
-        report.table("Saved ad drafts", [draft_row(row) for row in call(f"{route}/drafts")])
+        report.table("Saved ad drafts", [draft_row(row) for row in call(f"{route}/drafts")
+                                             if selected is None or row["resource"] in {ad["resource"] for ad in snapshot["ads"]}])
 
+    if week_end is None:
+        return
     week_start = week_end - timedelta(days=6)
     weekly = call(f"{route}/report", params={"start": week_start.isoformat(), "end": week_end.isoformat()})
+    if selected is not None:
+        weekly = filter_ads(weekly, selected)
     review = weekly_review(weekly, account, week_start, week_end)
     report.table("Weekly review scope", [{key: review[key] for key in
                  ("start", "end", "prior_start", "prior_end", "coverage", "has_activity", "ai_ready")}])
@@ -269,6 +290,11 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts)
         report.note(f"AI analysis unavailable for this comparison. The selected week has {review['current']['clicks']} "
                     f"clicks and the previous week has {review['previous']['clicks']}. "
                     f"Each week needs at least {MIN_CLICKS} clicks.")
+        return
+    if not include_ai:
+        return
+    if selected is not None and set(selected) != all_campaigns:
+        report.note("Account-wide AI interpretations excluded because only some Google Ads campaigns were selected.")
         return
     analyses = []
     for focus in FOCUSES:
@@ -476,7 +502,7 @@ def add_facebook_analytics(report, route, params, snapshots, campaign):
         report.note(f"Facebook Page and manual analytics unavailable. {exc}")
         return
     if campaign:
-        data = {**data, "manual": [row for row in data["manual"] if not row["item_id"] or row["item_id"] in snapshots]}
+        data = {**data, "manual": [row for row in data["manual"] if not row.get("item_id") or row["item_id"] in snapshots]}
     rows = page_rows(data, params["start"], params["end"])
     report.note("Facebook Page visibility covers the Page across content campaigns. API daily metrics use Meta "
                 "reporting boundaries. Follower totals are point observations. Unique counts and overlapping "
@@ -488,81 +514,8 @@ def add_facebook_analytics(report, route, params, snapshots, campaign):
 
 
 def show_reports(org, base, account, mode):
-    st.title("Reports & AI Insights")
-    st.caption("Export synced metrics for people and AI tools. Large reports include full CSV tables.")
-    content_route = f"{base}/content"
-    catalog = call(content_route)
-    campaigns = {entry["slug"]: entry["name"] for entry in catalog["campaigns"]}
-    campaign = st.selectbox("Content campaign", ["", *campaigns],
-                            format_func=lambda key: campaigns.get(key, "All discovered content"))
-    today = datetime.now(ZoneInfo(account["timezone"] if account else "America/Toronto")).date()
-    last = today - timedelta(days=1)
-    dates = st.date_input("Report date range", (last - timedelta(days=29), last),
-                          min_value=date(2000, 1, 1), max_value=today)
-    if len(dates) != 2:
-        st.info("Select both report dates.")
-        return
-    start, end = dates
-    if (end - start).days > 365:
-        st.info("Choose a date range of up to 366 days.")
-        return
-    week_end = st.date_input("Week ending for Weekly Review", max(date(2000, 1, 14), min(end, last)),
-                             min_value=date(2000, 1, 14), max_value=last) if account else None
-    terms = st.checkbox("Include Google Ads search terms and Search Console queries")
-    drafts = st.checkbox("Include saved ad drafts", disabled=account is None)
-    include_tiktok = st.checkbox("Include TikTok Ads", value=True)
-    st.caption("Includes performance totals, daily rows, Weekly Review, content links, and sync status. "
-               "Existing AI results for the selected week are included when available in this session.")
-    scope = (org["id"], account["id"] if account else None, campaign, start, end, week_end, terms, drafts,
-             include_tiktok)
-    if st.button("Generate report", type="primary"):
-        st.session_state.pop("generated-report", None)
-        with st.spinner("Preparing report…"):
-            report = Report()
-            report.table("Report scope", [{
-                "organization": org["name"], "mode": mode, "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-                "google_ads_account": account["name"] if account else None,
-                "content_campaign": campaigns.get(campaign, "All discovered content"),
-                "start": start.isoformat(), "end": end.isoformat(),
-                "includes_search_terms": terms, "includes_saved_drafts": drafts,
-                "content_visibility_objective": "Increase Shopify blog article and Facebook content views",
-            }])
-            params = {"start": start.isoformat(), "end": end.isoformat()}
-            report.table("Executive marketing summary", [
-                {"area": "Paid advertising", "coverage": "Google Ads account reporting and TikTok when configured"},
-                {"area": "Organic marketing", "coverage": "Facebook Page and posts, Shopify blog, GA4 and Search Console"},
-                {"area": "Commercial outcome", "coverage": "Canonical Shopify order totals and order attribution unavailable"},
-            ])
-            report.note("Meta paid reporting is not connected. Facebook Page and post insights describe organic content.")
-            report.table("Purchase conversion and attribution", [
-                {"measure": "Shopify orders and revenue", "status": "Unavailable", "basis": "Requires a Shopify order source"},
-                {"measure": "GA4 article landing purchases and revenue", "status": "Shown where reported",
-                 "basis": "Sessions that began on an article. Tagged subsets may overlap landing totals."},
-                {"measure": "Google Ads conversions and value", "status": "Shown where reported",
-                 "basis": "Ad platform attribution and configured conversion actions. May include actions other than purchases."},
-            ])
-            if account:
-                add_ads(report, account, f"{base}/accounts/{account['id']}", params, start, end,
-                        week_end, terms, drafts)
-            else:
-                report.note("No Google Ads account is connected.")
-                report.table("Marketing fact verification", fact_checks([]))
-            report.note("Use the AI interpretations alongside coverage and purchase evidence. "
-                        "Check measurement when sales outcomes are unavailable. CTR alone is not a basis for increasing spend.")
-            snapshots = add_content(report, content_route, catalog, campaign, params, terms)
-            add_facebook_analytics(report, content_route, params, snapshots, campaign)
-            if include_tiktok:
-                add_tiktok(report, base, params)
-            contents = [{"Section": name, "Rows": len(rows)} for name, rows in report.sections if name]
-            st.session_state["generated-report"] = scope, report.export(), contents
-    saved = st.session_state.get("generated-report")
-    if saved and saved[0] == scope:
-        data, extension, mime = saved[1]
-        with st.expander("Report contents"):
-            st.dataframe(saved[2], hide_index=True)
-        if extension == "zip":
-            st.info("Unzip the report and share report.md together with all its CSV files.")
-        st.download_button("Download report", data, f"okoo-marketing-{start}-{end}.{extension}", mime)
+    from frontend.report_builder import show_report_builder
+    show_report_builder(org, base, mode)
 
 
 def add_tiktok(report, base, params):

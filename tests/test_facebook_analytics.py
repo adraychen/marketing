@@ -123,3 +123,27 @@ def test_manual_create_duplicate_edit_delete_and_tenant_isolation(monkeypatch):
     finally:
         conn.rollback()
         conn.close()
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_manual_observation_renders_new_and_page_scope_without_key_error(saved):
+    from streamlit.testing.v1 import AppTest
+
+    script = """
+from frontend.facebook_analytics import edit_manual
+from streamlit import session_state
+edit_manual("/content/facebook", session_state["test_data"], [], "2026-11-01", "2026-11-09")
+"""
+    manual = [{"id": "observation", "content_title": None, "page_id": "page", "item_id": None,
+               "metric": "followers_count", "value": 4, "basis": "point",
+               "period_start": "2026-11-09", "period_end": "2026-11-09",
+               "observed_day": "2026-11-09"}] if saved else []
+    app = AppTest.from_string(script)
+    app.session_state["test_data"] = {"can_edit": True, "pages": ["page"], "manual": manual}
+    app.run()
+    assert not app.exception
+    assert next(widget for widget in app.selectbox if widget.label == "Scope").value is None
+    if saved:
+        app.selectbox[0].set_value("observation").run()
+        assert not app.exception
+        assert next(widget for widget in app.selectbox if widget.label == "Scope").value is None
