@@ -148,7 +148,7 @@ def show_meta_ads(base,mode):
         st.write(data["policy"])
         st.write(PURCHASE_NOTE)
         table([{"synced_from":account["synced_from"],"synced_through":account["synced_through"],"synced_at":account["synced_at"]}])
-    performance,settings,creative,daily=st.tabs(["Campaign performance","Campaigns & ad sets","Ads & creative","Daily metrics"])
+    daily,performance,settings,creative=st.tabs(["Daily performance","Campaign performance","Campaigns & ad sets","Ads & creative"])
     with performance:
         table(campaigns(data))
         from frontend.campaign_evaluation import show
@@ -160,4 +160,5 @@ def show_meta_ads(base,mode):
     with creative:
         table(data["ads"])
     with daily:
-        table(data["daily"])
+        from frontend.meta_daily_charts import show_daily_charts
+        show_daily_charts(data, start, end, currency)
