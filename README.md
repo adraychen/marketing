@@ -176,3 +176,7 @@ Google campaign descendants, performance, and drafts are filtered by selection. 
 ## Meta paid advertising
 
 Paid Meta reporting is implemented as a separate read-only integration from organic Page Insights. Follow [META_PAID_ADS_SETUP.md](META_PAID_ADS_SETUP.md) for the migration, backend/cron environment variables, token expiry, verification, and data definitions. The existing content cron imports the configured paid account daily. Use Connections & Sync > Meta Paid Ads for manual sync, Paid Advertising > Meta Ads for campaign/creative review, and Facebook Paid Ads in the report builder. No live credential or production migration is applied by these code changes.
+
+## Campaign evaluation
+
+Meta campaign performance and exports include a source-labeled funnel, product-landing ecommerce outcomes, Shopify UTM order attribution, tracking diagnostics, profitability estimates, and evidence-based recommendations. Optional AI interpretation uses the existing Groq integration. Follow [CAMPAIGN_EVALUATION.md](CAMPAIGN_EVALUATION.md) for the additive migration, optional product/cost permissions, detailed-sync flag, formulas, and attribution limitations. Active campaigns and budgets are never modified.

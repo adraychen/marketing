@@ -97,7 +97,7 @@ class Report:
             filename = f"{len(tables) + 1:02d}-{slug}.csv"
             tables.append((filename, columns, rows))
             archive_section = heading + f" · [CSV table]({filename})"
-            if name in ARCHIVE_SUMMARIES:
+            if name in ARCHIVE_SUMMARIES or (name.startswith('Campaign evaluation ') and not name.endswith('daily funnel')):
                 archive_section += "\n\n" + "\n".join(lines)
             archive.append(archive_section)
         document = "\n\n".join(inline).encode("utf-8")

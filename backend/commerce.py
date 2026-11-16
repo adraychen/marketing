@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+import math
 from zoneinfo import ZoneInfo
 
 from psycopg2.extras import Json, execute_values
@@ -14,11 +15,16 @@ query CommerceContext {
 }
 """
 ORDERS_QUERY = """
-query CommerceOrders($after: String, $query: String!) {
+query CommerceOrders($after: String, $query: String!, $details: Boolean!) {
   orders(first: 100, after: $after, query: $query, sortKey: CREATED_AT) {
     nodes {
       id createdAt updatedAt test cancelledAt displayFinancialStatus
       currentTotalPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+      currentTotalTaxSet @include(if: $details) { shopMoney { amount currencyCode } }
+      lineItems(first: 100) @include(if: $details) {
+        nodes { currentQuantity variant { id } }
+        pageInfo { hasNextPage }
+      }
       customerJourneySummary {
         ready
         lastVisit { occurredAt utmParameters { source medium campaign content term } }
@@ -79,10 +85,12 @@ def normalize_order(order):
             "amount": value, "currency": money["currencyCode"],
             "presentment": order["currentTotalPriceSet"]["presentmentMoney"],
             "channel": channel_for(utm) if attributed else "Other / Direct / Unattributed",
-            "attributed": attributed, "utm": utm}
+            "attributed": attributed, "utm": utm,
+            "evaluation": {"tax": order.get("currentTotalTaxSet", {}).get("shopMoney"),
+                           "line_items": order.get("lineItems")}}
 
 
-def import_orders(client, org, shop, token, days):
+def import_orders(client, org, shop, token, days, detailed=False):
     context = shopify_query(client, shop, token, CONTEXT_QUERY)
     scopes = {scope["handle"] for scope in context["currentAppInstallation"]["accessScopes"]}
     if not scopes & {"read_orders", "write_orders"}:
@@ -97,7 +105,7 @@ def import_orders(client, org, shop, token, days):
     cursor, seen = None, set()
     orders = {}
     while True:
-        data = shopify_query(client, shop, token, ORDERS_QUERY, {"after": cursor, "query": query})["orders"]
+        data = shopify_query(client, shop, token, ORDERS_QUERY, {"after": cursor, "query": query, "details": detailed})["orders"]
         for raw in data["nodes"]:
             normalized = normalize_order(raw)
             created = datetime.fromisoformat(normalized["created_at"].replace("Z", "+00:00"))
@@ -125,6 +133,11 @@ def import_orders(client, org, shop, token, days):
             """, [(org, shop, *[row[key] for key in ("order_id","created_at","updated_at","eligible","financial_status",
                                                        "amount","currency")], Json(row["presentment"]), row["channel"],
                     row["attributed"], Json(row["utm"])) for row in orders.values()])
+            if detailed:
+                execute_values(cur, """update marketing_shopify_orders o set evaluation=v.evaluation::jsonb
+                    from (values %s) as v(org,shop,order_id,evaluation)
+                    where o.order_id=v.order_id and o.organization_id=v.org::uuid and o.shop=v.shop""",
+                    [(org, shop, row['order_id'], Json(row['evaluation'])) for row in orders.values()])
         cur.execute("""insert into marketing_commerce_coverage
             (organization_id,source,account,start_day,end_day,timezone,currency,collected_at)
             values (%s,'shopify_orders',%s,%s,%s,%s,%s,now())
@@ -135,7 +148,7 @@ def import_orders(client, org, shop, token, days):
     return len(orders)
 
 
-def import_sessions(client, org, property_id, zone, days):
+def import_sessions(client, org, property_id, zone, days, detailed=False):
     end = datetime.now(ZoneInfo(zone)).date() - timedelta(days=1)
     first = end - timedelta(days=days - 1)
     endpoint = f"https://analyticsdata.googleapis.com/v1beta/properties/{property_id}:runReport"
@@ -146,10 +159,17 @@ def import_sessions(client, org, property_id, zone, days):
                                                       "ecommercePurchases", "purchaseRevenue")],
                "limit": "10000", "offset": "0"}
     rows = []
+    landing_rows = []
+    seen_dimensions = set()
+    if detailed:
+        # A landing page is session-scoped. Do not add event-scoped hostName:
+        # a cross-domain session could then be counted once per host when rolled up.
+        request['dimensions'].append({'name': 'landingPagePlusQueryString'})
+    request['orderBys'] = [{'dimension': {'dimensionName': d['name']}} for d in request['dimensions']]
     while True:
         body = analytics_response(client.post(endpoint, headers=headers, json=request))
         metadata = body.get("metadata", {})
-        if (metadata.get("subjectToThresholding") or metadata.get("dataLossFromOtherRow")
+        if (metadata.get("subjectToThresholding") or metadata.get("dataLossFromOtherRow") or metadata.get('samplingMetadatas')
                 or metadata.get("schemaRestrictionResponse", {}).get("activeMetricRestrictions")):
             raise ContentError("GA4 restricted or thresholded the storewide report. Previous import was kept.")
         if metadata["timeZone"] != zone:
@@ -157,9 +177,19 @@ def import_sessions(client, org, property_id, zone, days):
         currency = metadata.get("currencyCode")
         page = body.get("rows", [])
         for row in page:
-            day, source, medium, campaign = [entry["value"] for entry in row["dimensionValues"]]
+            dimensions = [entry["value"] for entry in row["dimensionValues"]]
+            if tuple(dimensions) in seen_dimensions:
+                raise ContentError('GA4 returned duplicate dimension rows. Previous import was kept.')
+            seen_dimensions.add(tuple(dimensions))
+            day, source, medium, campaign = dimensions[:4]
             metrics = {spec["name"]: float(value["value"]) for spec, value in zip(request["metrics"], row["metricValues"], strict=True)}
+            parsed_day = datetime.strptime(day, '%Y%m%d').date()
+            if not first <= parsed_day <= end or not all(math.isfinite(v) for v in metrics.values()):
+                raise ContentError('GA4 returned invalid dates or metrics. Previous import was kept.')
             rows.append((org, property_id, datetime.strptime(day, "%Y%m%d").date(), source, medium, campaign, Json(metrics)))
+            if detailed:
+                landing_rows.append(dict(day=day, source=source, medium=medium, campaign=campaign,
+                                         landing_page=dimensions[4], metrics=metrics))
         offset = int(request["offset"]) + len(page)
         if not page and offset < body.get("rowCount", offset):
             raise ContentError("GA4 returned an incomplete page. Previous import was kept.")
@@ -171,7 +201,20 @@ def import_sessions(client, org, property_id, zone, days):
         cur.execute("""delete from marketing_ga4_store_daily where organization_id=%s and property_id=%s
                        and day between %s and %s""", (org, property_id, first, end))
         if rows:
+            if detailed:
+                # The richer request replaces, rather than duplicates, the existing storewide request.
+                grouped = {}
+                for row in rows:
+                    key = row[:6]
+                    total = grouped.setdefault(key, {name: 0 for name in row[6].adapted})
+                    for name, value in row[6].adapted.items():
+                        total[name] += value
+                rows = [(*key, Json(value)) for key, value in grouped.items()]
             execute_values(cur, "insert into marketing_ga4_store_daily values %s", rows)
+        if detailed:
+            from backend.evaluation_data import save_snapshot
+            save_snapshot(cur, org, 'ga4_landing', property_id,
+                          {'rows': landing_rows, 'timezone': zone, 'currency': currency}, first, end)
         cur.execute("""insert into marketing_commerce_coverage
             (organization_id,source,account,start_day,end_day,timezone,currency,collected_at)
             values (%s,'ga4_store',%s,%s,%s,%s,%s,now())

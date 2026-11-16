@@ -1,0 +1,31 @@
+
+query CommerceOrders($after: String, $query: String!, $details: Boolean!) {
+  orders(first: 100, after: $after, query: $query, sortKey: CREATED_AT) {
+    nodes {
+      id createdAt updatedAt test cancelledAt displayFinancialStatus
+      currentTotalPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+      currentTotalTaxSet @include(if: $details) { shopMoney { amount currencyCode } }
+      lineItems(first: 100) @include(if: $details) {
+        nodes { currentQuantity variant { id } }
+        pageInfo { hasNextPage }
+      }
+      customerJourneySummary {
+        ready
+        lastVisit { occurredAt utmParameters { source medium campaign content term } }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+
+
+query EvaluationProducts($after: String, $costs: Boolean!) {
+  productVariants(first: 100, after: $after) {
+    nodes {
+      id sku price
+      product { id handle title onlineStoreUrl }
+      inventoryItem @include(if: $costs) { unitCost { amount currencyCode } }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}

@@ -1,0 +1,47 @@
+# Campaign evaluation
+
+The Meta Ads campaign-performance tab and exported reports now use the same campaign evaluation. No campaign, budget, ad, Pixel, or storefront tracking installation is changed. Existing Google Ads reports and CSV columns are retained; evaluation adds separate report tables.
+
+## Enable the additional evidence
+
+1. Apply `supabase/migrations/20261112000100_campaign_evaluation.sql` after the existing commerce and Meta migrations. This adds an order-detail JSON column and tenant-scoped product/landing snapshots and cost assumptions. Apply before enabling the new flag.
+2. Deploy the backend, Streamlit frontend, and content cron together. Existing reports work without the new flag. The Meta funnel uses already-imported raw actions immediately.
+3. On the existing Shopify integration, retain `read_content` and `read_orders`. Add and approve `read_products` for verified product matching. For purchase costs, grant `read_inventory` and any Shopify permission needed to view product costs. Missing access does not grant permissions automatically. Costs remain unavailable if Shopify does not return `unitCost`.
+4. On the existing content cron, retain `COMMERCE_SYNC_ENABLED=true` and set `CAMPAIGN_EVALUATION_ENABLED=true`. Reuse the same Shopify and GA4 credentials. Confirm the configured GA4 property belongs to the storefront in `CONTENT_STOREFRONT_URL` (default `https://okoostore.com`). Set the same storefront URL on the API if it differs from the default.
+5. Run `python -m backend.content_jobs`. Look for `shopify_orders`, `ga4_store`, `ga4_landing`, and `shopify_products` results. Run the existing Meta sync once to populate ad-set `promoted_object` when returned by Meta. No new Meta permission is requested.
+6. Open Paid Advertising → Meta Ads, select November 1–11, 2026 (or another fully covered period), and review Campaign performance. Admins can save explicit shipping/fulfillment cost, payment percentage and fixed fee, other variable cost per order, currency, and a source/effective-date note in Variable-cost assumptions. Zeros require explicit confirmation. Current Shopify variant purchase costs are used only when every retained order line has an accessible matching cost.
+
+No new GA4 tracking installation is required to query existing events. Missing instrumentation cannot be recovered by a reporting import. Verify an existing purchase flow and transaction/event deduplication before claiming end-to-end tracking is verified.
+
+## Definitions and safeguards
+
+- Meta stages use `impressions`, `inline_link_clicks`, and exactly one raw category each: `landing_page_view`, `offsite_conversion.fb_pixel_view_content`, `offsite_conversion.fb_pixel_add_to_cart`, `offsite_conversion.fb_pixel_initiate_checkout`, `offsite_conversion.fb_pixel_purchase`. Broad `purchase`, `omni_purchase`, or `view_content` categories are not added to website categories. Absent categories remain unavailable; partially reported stages have no CPA or comparison.
+- The configured Meta account timezone, unified ad-set attribution, and impression-date reporting remain unchanged. Only link clicks / impressions is treated as a comparable rate. Later events are not a unique-user cohort: five ViewContent actions after four landing-page views is possible, not a 125% conversion rate. Cost per event is spend divided by the observed event count, not a customer acquisition cost.
+- Current and equal-length prior periods and daily observations are exported. Changes require full coverage, complete metric fields, and matching known attribution settings. Ads that have no Insights row are not silently filled with missing purchase zeros. Reach and frequency remain non-additive.
+- GA4 adds the session-scoped `landingPagePlusQueryString` dimension to the existing storewide request. The six metrics and date/source/medium/campaign dimensions are unchanged. Landing detail and rolled-up legacy tables are committed atomically. It does not add event-scoped hostname, which could split a cross-domain session. Product matching uses exact UTM source/medium/campaign plus a product landing path from a verified Shopify destination; verify property/storefront ownership. This measures outcomes during sessions landing on that path, **not purchased-item identity**. Item-level and individual-ad outcomes remain unavailable without additional verified dimensions. Multiple GA4 properties are not assumed disjoint.
+- If the richer GA4 dimensions return `INVALID_ARGUMENT`, only then is the original storewide query retried; the landing failure remains visible. Thresholded, sampled, restricted, duplicate, or incomplete responses retain previous snapshots. No separate redundant GA4 report is requested on successful runs.
+- UTM comparisons preserve exact spelling/case. Shared campaign tuples, missing tags, conflicts between URL and creative tags, and unresolved dynamic macros are flagged and not allocated. Known ID/name macros are resolved from latest imported metadata; historical renamed campaigns or changed destinations are not reconstructed. Unknown traffic is retained as unallocated storewide context. Product links on a different host or missing from the catalog stay unverified.
+- Shopify campaign orders reuse canonical `(shop, order_id)` records, existing eligibility rules, and last-recorded-visit UTMs. They are counted once per uniquely matched campaign and never summed with Meta or GA4 purchases. Current Shopify eligibility excludes test, canceled, unpaid, and fully refunded orders. This is an order-creation-date report, not payment-date accounting. Default Shopify coverage remains the latest 59 completed days.
+- Shopify-attributed revenue retains the existing total including tax/shipping. Estimated contribution = attributed revenue − current order tax − current unit cost × retained line quantity − modeled shipping/fulfillment − modeled payment fees − modeled other costs − campaign spend. Break-even acquisition cost = that pre-ad contribution / attributed orders. Payment percentage applies to the tax-inclusive order total. Fixed expenses, tax on costs, returns handling, and other unmodeled costs are excluded; model them explicitly where appropriate. Current costs are estimates, not historical COGS. More than 100 line items, deleted/unmatched variants, missing tax/costs, or currency/timezone mismatches prevent a contribution estimate. No currency conversion or margin inference is performed.
+- Pixel/dataset configuration uses imported ad-set `promoted_object` when available. It does not prove event delivery or Pixel/CAPI deduplication. Imported purchase events, no recorded purchases, unavailable fields, source-sync errors, and unverified end-to-end tracking are separate labels. Sync errors do not by themselves prove broken storefront instrumentation.
+
+## Analysis and exports
+
+Every campaign gets six evidence-based recommendations: delivery, engagement, landing acquisition, shopping behavior, purchases, profitability. Low volume or missing coverage leads to monitoring/checking recommendations rather than premature creative or budget changes. The 100-link-click / 20-attributed-order confidence thresholds are transparent heuristics, not a statistical test.
+
+Optional **Generate campaign AI analysis** reuses `GROQ_API_KEY` / `GROQ_REVIEW_MODEL`, requires an organization admin, and sends only aggregate numerical evidence and diagnostic labels. Campaign names, URLs, order IDs, SKU values, creative text, and cost-model notes are excluded. Analysis is cached only in the current Streamlit session and exported only when dates and campaign evidence still match. Export never generates new AI requests. Deterministic recommendations are always included.
+
+Existing CSV sections and columns remain compatible; new evaluation tables are additive. The Markdown file inside large ZIP exports keeps campaign summaries inline, with daily data linked as CSV. Unallocated traffic is explicitly storewide context, not attributed to the selected subset.
+
+## Validation and API references
+
+`tests/test_campaign_evaluation.py` covers the supplied 171 impressions / 6 link clicks / 4 LPV / 5 ViewContent / CAD 4.16 example, missing and partial actions, UTM ambiguity, product/host matching, unknown traffic, canonical order deduplication, currencies/timezones, contribution calculations, input validation, endpoint roles, export selection, AI payload privacy, GA4 rollup, and the Streamlit form.
+
+`tests/evaluation_queries.graphql` records the read-only queries validated against Shopify Admin API 2026-10. Live provider access and the production migration must still be verified in deployment; unit tests use mocked providers. Live/PostgreSQL tests are conditional on their existing environment flags.
+
+- [Shopify productVariants](https://shopify.dev/docs/api/admin-graphql/2026-10/queries/productVariants)
+- [Shopify inventoryItems and unit costs](https://shopify.dev/docs/api/admin-graphql/2026-10/queries/inventoryItems)
+- [Shopify Order](https://shopify.dev/docs/api/admin-graphql/2026-10/objects/Order)
+- [GA4 dimensions and metrics](https://developers.google.com/analytics/devguides/reporting/data/v1/api-schema)
+- [Meta's promoted-object SDK fields](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adpromotedobject.py)
+- [Meta action-stat reference](https://developers.facebook.com/docs/marketing-api/reference/ads-action-stats/)

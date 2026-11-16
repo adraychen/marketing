@@ -10,7 +10,7 @@ from psycopg2.extras import Json
 
 from backend import commerce, meta_ads, content_repository as repo
 from backend.connectors.meta_ads import MetaAdsError
-from psycopg2.errors import UndefinedTable
+from psycopg2.errors import UndefinedTable, UndefinedColumn
 from backend.facebook_analytics import collect_page_metrics, unsupported_page_metrics, write_page_metrics
 from backend.config import MODE
 from backend.connectors.content import (
@@ -302,18 +302,43 @@ def commerce_sync(client, org, shop, token, client_id, client_secret, days):
                     failed |= finish(org, source, "skipped", message="Shopify store or credentials are missing.")
                     continue
                 credential = token or shopify_token(client, shop, client_id, client_secret)
-                count = commerce.import_orders(client, org, shop, credential, days)
+                count = commerce.import_orders(client, org, shop, credential, days,
+                                              detailed=environment("CAMPAIGN_EVALUATION_ENABLED").lower() in {"1", "true", "yes"})
             else:
                 prop = environment("CONTENT_GA4_PROPERTY_ID")
                 if not re.fullmatch(r"[0-9]+", prop):
                     failed |= finish(org, source, "skipped", message="Set the numeric GA4 property ID.")
                     continue
-                count = commerce.import_sessions(client, org, prop, environment("CONTENT_GA4_TIMEZONE", "America/Toronto"), days)
+                detailed = environment("CAMPAIGN_EVALUATION_ENABLED").lower() in {"1", "true", "yes"}
+                try:
+                    count = commerce.import_sessions(client, org, prop, environment("CONTENT_GA4_TIMEZONE", "America/Toronto"), days,
+                                                    detailed=detailed)
+                    if detailed:
+                        finish(org, 'ga4_landing', 'succeeded', count)
+                except ContentError as exc:
+                    if detailed:
+                        failed |= finish(org, 'ga4_landing', 'failed', message=message(exc))
+                    if not detailed or 'INVALID_ARGUMENT' not in str(exc):
+                        raise
+                    # Only retry when the richer dimensions are rejected. Preserve established storewide reporting.
+                    count = commerce.import_sessions(client, org, prop, environment("CONTENT_GA4_TIMEZONE", "America/Toronto"), days)
             finish(org, source, "succeeded", count)
-        except UndefinedTable:
-            failed |= finish(org, source, "failed", message="Apply the commerce metrics migration before enabling commerce sync.")
+        except (UndefinedTable, UndefinedColumn):
+            failed |= finish(org, source, "failed", message="Apply the commerce and campaign evaluation migrations before enabling their sync flags.")
         except SOURCE_ERRORS as exc:
             failed |= finish(org, source, "failed", message=message(exc))
+    if environment("CAMPAIGN_EVALUATION_ENABLED").lower() in {"1", "true", "yes"}:
+        try:
+            from backend.evaluation_data import import_products
+            if not shop or not (token or client_id and client_secret):
+                raise ContentError('Shopify product credentials are missing.')
+            credential = token or shopify_token(client, shop, client_id, client_secret)
+            count = import_products(client, org, shop, credential)
+            finish(org, 'shopify_products', 'succeeded', count)
+        except UndefinedTable:
+            failed |= finish(org, 'shopify_products', 'failed', message='Apply the campaign evaluation migration.')
+        except SOURCE_ERRORS as exc:
+            failed |= finish(org, 'shopify_products', 'failed', message=message(exc))
     return failed
 
 

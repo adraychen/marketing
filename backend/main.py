@@ -21,6 +21,7 @@ from backend.models import DraftInput
 from backend.review import MIN_CLICKS, weekly_review
 from backend.review_ai import FOCUS_PROMPTS, ReviewAIError, enabled as review_ai_enabled, explain
 from backend.validation import validate
+from backend.evaluation_data import CostModel
 
 app = FastAPI(title="Okoo Marketing Dashboard", version="1.0", debug=False)
 
@@ -193,6 +194,69 @@ def meta_ads_sync(org: str, membership=Depends(member)):
         raise HTTPException(503,"Apply 20261111000200_meta_paid_ads.sql before importing Meta paid ads.") from None
     except (MetaAdsError,ValueError) as exc:
         raise HTTPException(502,str(exc) if isinstance(exc,MetaAdsError) else "Check META_ADS_LOOKBACK_DAYS (1-365).") from None
+
+
+@app.get('/orgs/{org}/meta-ads/evaluation')
+def campaign_evaluation(org: str, start: date, end: date, _member=Depends(member)):
+    from backend import campaign_evaluation as evaluation, evaluation_data
+    if start > end or end-start > timedelta(days=365):
+        raise HTTPException(422, 'Choose a valid period of up to 366 days.')
+    if MODE == 'demo':
+        return {'start': str(start), 'end': str(end), 'policy': evaluation.NOTE, 'campaigns': [],
+                'source_snapshots': [], 'unallocated_ga4_traffic': [], 'unallocated_shopify_orders': 0}
+    try:
+        current = meta_ads.report(org, start, end)
+        prior_start, prior_end = previous_period(start, end)
+        previous = meta_ads.report(org, prior_start, prior_end)
+        try:
+            outcomes = commerce.summary(org, start, end)
+        except UndefinedTable:
+            outcomes = {'coverage': [], 'orders': [], 'ga4': [], 'latest_runs': []}
+        return evaluation.evaluate(current, previous, outcomes, evaluation_data.evidence(org, start, end),
+                                   meta_ads.status(org), start, end,
+                                   os.getenv('CONTENT_STOREFRONT_URL', 'https://okoostore.com'))
+    except UndefinedTable:
+        raise HTTPException(503, 'Meta paid reporting schema is unavailable.') from None
+    except MetaAdsError as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
+@app.put('/orgs/{org}/meta-ads/campaigns/{campaign_id}/cost-model')
+def campaign_cost_model(org: str, campaign_id: str, model: CostModel, membership=Depends(member)):
+    from backend import evaluation_data
+    if MODE != 'live' or membership['role'] != 'admin':
+        raise HTTPException(403, 'An organization admin must save cost assumptions.')
+    from backend.connectors.meta_ads import configuration
+    config = configuration(org)
+    if not config:
+        raise HTTPException(404, 'Configured Meta account unavailable.')
+    try:
+        with repo.database() as cur:
+            cur.execute("""select 1 from marketing_meta_ads_resources where organization_id=%s
+                and account_id=%s and kind='campaigns' and resource_id=%s""", (org,config['account_id'],campaign_id))
+            if not cur.fetchone():
+                raise HTTPException(404, 'Campaign unavailable.')
+        evaluation_data.save_cost_model(org,config['account_id'],campaign_id,model)
+    except UndefinedTable:
+        raise HTTPException(503, 'Apply the campaign evaluation migration before saving costs.') from None
+    return {'saved': True}
+
+
+@app.post('/orgs/{org}/meta-ads/campaigns/{campaign_id}/analysis')
+def campaign_analysis(org: str, campaign_id: str, start: date, end: date, membership=Depends(member)):
+    from backend.review_ai import explain_campaign
+    if MODE != 'live' or membership['role'] != 'admin':
+        raise HTTPException(403, 'An organization admin must request AI analysis.')
+    if not review_ai_enabled():
+        raise HTTPException(503, 'Configure GROQ_API_KEY on the backend for optional AI analysis.')
+    evidence = campaign_evaluation(org, start, end, membership)
+    campaign = next((c for c in evidence['campaigns'] if c['campaign_id'] == campaign_id), None)
+    if campaign is None:
+        raise HTTPException(404, 'Campaign unavailable.')
+    try:
+        return explain_campaign(campaign)
+    except ReviewAIError as exc:
+        raise HTTPException(503, str(exc)) from None
 
 
 @app.get("/orgs/{org}/tiktok-ads/status")

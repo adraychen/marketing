@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from backend.metrics import previous_period, ratio
+from backend.meta_purchase_metrics import PURCHASE_NOTE, purchase_totals
 from frontend.client import APIError, call
 from frontend.views import number, table
 
@@ -24,13 +25,13 @@ def scoped(data, campaign_ids):
 def totals(data):
     rows = data["daily"]
     result = {}
-    for key in ("spend","impressions","clicks","inline_link_clicks","website_purchases","website_purchase_value"):
+    for key in ("spend","impressions","clicks","inline_link_clicks"):
         values = [row.get(key) for row in rows]
         result[key] = (sum(values) if values and all(value is not None for value in values)
                        else 0 if not rows and data["coverage"] and key in ("spend","impressions","clicks","inline_link_clicks") else None)
     result["ctr"] = ratio(result["clicks"],result["impressions"])
     result["cpc"] = ratio(result["spend"],result["clicks"])
-    result["website_roas"] = ratio(result["website_purchase_value"],result["spend"])
+    result.update(purchase_totals(rows, result['spend'], data['coverage']))
     return result
 
 
@@ -42,10 +43,11 @@ def campaigns(data):
              **totals({**data,"daily":grouped[row["id"]]})} for row in data["campaigns"]]
 
 
-def add_meta_report(report,base,start,end,campaign_ids,data=None):
+def add_meta_report(report,base,start,end,campaign_ids,data=None,include_ai=False):
     data = scoped(data or load_report(base,start,end),campaign_ids)
     account = data["account"]
     report.note(data["policy"])
+    report.note(PURCHASE_NOTE)
     report.table("Meta paid coverage", [{"account_id":account["account_id"] if account else None,
         "start":str(start),"end":str(end),"complete":data["coverage"],"stale":data["stale"],
         "synced_from":account["synced_from"] if account else None,
@@ -61,6 +63,11 @@ def add_meta_report(report,base,start,end,campaign_ids,data=None):
     report.table("Meta paid ad set settings and targeting",data["adsets"])
     report.table("Meta paid ads and creative",data["ads"])
     report.table("Meta paid daily ad performance",data["daily"])
+    from frontend.campaign_evaluation import add_report, load
+    try:
+        add_report(report, load(base, start, end), campaign_ids, base, include_ai)
+    except APIError as exc:
+        report.note('Campaign evaluation unavailable: ' + str(exc))
 
 
 def sync_panel(base,mode,role):
@@ -124,20 +131,28 @@ def show_meta_ads(base,mode):
         st.warning("Partial or missing date coverage. Figures below describe reported rows only.")
     if data["stale"]:
         st.warning("Last successful Meta paid import is over 48 hours old.")
+    if any(current_totals[key + '_status'] == 'Reported subtotal' for key in ('website_purchases', 'website_purchase_value')):
+        st.caption(PURCHASE_NOTE)
     if status.get("runs") and status["runs"][0]["status"]=="failed":
         st.warning("Latest paid sync failed. Showing the last successful import.")
     for columns,keys in ((st.columns(3),[("spend","Spend","money"),("clicks","All clicks","count"),("inline_link_clicks","Link clicks","count")]),
                          (st.columns(3),[("website_purchases","Meta website purchases","count"),("website_purchase_value","Meta website purchase value","money"),("website_roas","Meta website ROAS","multiple")])):
         for column,(key,label,kind) in zip(columns,keys):
             now,old=current_totals[key],prior_totals[key]
-            delta=number(now-old,kind,currency) if data["coverage"] and previous["coverage"] and now is not None and old is not None else None
+            purchase_key = 'website_purchase_value' if key == 'website_roas' else key
+            comparable = (purchase_key not in ('website_purchases', 'website_purchase_value') or
+                          all(t[purchase_key + '_status'] == 'Reported total' for t in (current_totals, prior_totals)))
+            delta=number(now-old,kind,currency) if comparable and data["coverage"] and previous["coverage"] and now is not None and old is not None else None
             column.metric(label,number(now,kind,currency) if now is not None else "Not available",delta)
     with st.expander("Definitions and coverage"):
         st.write(data["policy"])
+        st.write(PURCHASE_NOTE)
         table([{"synced_from":account["synced_from"],"synced_through":account["synced_through"],"synced_at":account["synced_at"]}])
     performance,settings,creative,daily=st.tabs(["Campaign performance","Campaigns & ad sets","Ads & creative","Daily metrics"])
     with performance:
         table(campaigns(data))
+        from frontend.campaign_evaluation import show
+        show(base, start, end, selected)
     with settings:
         st.caption("Budget and bid fields below are raw Meta minor currency units. Settings reflect latest discovery.")
         table(data["campaigns"])

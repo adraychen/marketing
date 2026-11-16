@@ -13,7 +13,7 @@ class MetaAdsError(Exception):
 
 RESOURCE_FIELDS = {
     "campaigns": "id,name,status,effective_status,objective,buying_type,daily_budget,lifetime_budget,bid_strategy,start_time,stop_time,created_time,updated_time",
-    "adsets": "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,billing_event,optimization_goal,start_time,end_time,attribution_spec,targeting,created_time,updated_time",
+    "adsets": "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,bid_strategy,bid_amount,billing_event,optimization_goal,start_time,end_time,attribution_spec,targeting,promoted_object,created_time,updated_time",
     "ads": "id,name,campaign_id,adset_id,status,effective_status,created_time,updated_time,creative{id,name,title,body,call_to_action_type,object_story_id,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags,link_url,image_url,video_id,thumbnail_url}"
 }
 # DELETED is a valid object state but is rejected as a discovery filter by
