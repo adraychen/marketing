@@ -1,6 +1,6 @@
 import difflib
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -82,26 +82,43 @@ def dashboard(report, account, _route, start, end):
         return
 
     st.subheader("Performance over time")
-    chart_metrics = {label: key for key, label, _ in METRICS}
-    selected = st.selectbox("Chart metric", chart_metrics)
-    metric = chart_metrics[selected]
-    points = []
-    periods = [("Selected period", start, current)]
+    st.caption(f"Daily values, not cumulative · {start:%b %d, %Y} – {end:%b %d, %Y}. "
+               "The horizontal axis follows the reporting dates selected above. Gaps mean no imported daily value.")
     if compare:
+        st.caption('The previous period is aligned by day for comparison; hover to see its original date.')
+    points = daily_chart_points(current, prior if compare else [], start, end, currency)
+    for offset in range(0, len(METRICS), 2):
+        for column, (metric, label, kind) in zip(st.columns(2), METRICS[offset:offset + 2]):
+            with column:
+                st.write(label)
+                figure = px.line(pd.DataFrame(points), x="Chart date", y=metric, color="Period",
+                                 markers=True, hover_data=["Date"], color_discrete_sequence=["#007f73", "#8c79d4"])
+                figure.update_traces(connectgaps=False)
+                figure.update_layout(height=320, legend_title_text="", xaxis_title="Date",
+                                     yaxis_title=f'{label} ({currency})' if kind == 'money' else label,
+                                     legend=dict(orientation='h', y=-.3), margin=dict(t=15, b=20))
+                figure.update_xaxes(type='date', tickformat='%b %d\n%Y')
+                if kind == 'percent':
+                    figure.update_yaxes(tickformat='.1%')
+                st.plotly_chart(figure, width='stretch', key=f'google-daily:{metric}')
+
+
+def daily_chart_points(current, prior, start, end, currency):
+    """Calendar dates on the axis; original dates retained for comparison hover."""
+    points = []
+    before_start, _ = previous_period(start, end)
+    periods = [("Selected period", start, current)]
+    if prior:
         periods.append(("Previous period", before_start, prior))
     for label, first, rows in periods:
         daily = defaultdict(list)
         for row in rows:
             daily[date.fromisoformat(row["day"])].append(row)
-        for day in sorted(daily):
-            points.append({"Period": label, "Day in period": (day - first).days + 1, "Date": day,
-                           selected: summarize(daily[day], currency)[metric]})
-    figure = px.line(pd.DataFrame(points), x="Day in period", y=selected, color="Period",
-                     markers=True, hover_data=["Date"], color_discrete_sequence=["#007f73", "#8c79d4"])
-    figure.update_layout(height=380, legend_title_text="")
-    if metric in {"ctr", "conversion_rate"}:
-        figure.update_yaxes(tickformat=".1%")
-    st.plotly_chart(figure, width="stretch")
+        for offset in range((end-start).days+1):
+            day = first + timedelta(days=offset)
+            values = summarize(daily[day], currency) if day in daily else {key: None for key, _, _ in METRICS}
+            points.append({'Period': label, 'Chart date': start+timedelta(days=offset), 'Date': day, **values})
+    return points
 
 
 def pretty(value):

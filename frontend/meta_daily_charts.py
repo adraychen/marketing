@@ -87,16 +87,15 @@ def show_daily_charts(data, start, end, currency):
         return
     selected = st.multiselect('Ads to chart', list(labels), default=list(labels)[:5],
                               format_func=labels.get, key='meta-daily-chart-ads')
-    metrics = st.multiselect('Chart metrics', list(METRICS),
-                             default=['Spend', 'Link clicks', 'Website purchases', 'Purchase value'],
-                             key='meta-daily-chart-metrics')
+    metrics = list(METRICS)
     account = data.get('account') or {}
     st.caption(f"Stored Meta data · Last sync: {account.get('synced_at', 'Unavailable')} · "
                f"Imported through: {account.get('synced_through', 'Unavailable')}. Each line represents one ad.")
     st.caption('Gaps mean unavailable data, not zero. Explicit zeros are plotted. Reach and frequency remain per ad per day. '
                'Purchases and revenue use Meta attribution; changing chart selections does not trigger a sync.')
+    st.caption(f'Daily values, not cumulative · {start:%b %d, %Y} – {end:%b %d, %Y}. All metrics are shown below.')
     if not selected or not metrics:
-        st.info('Select at least one ad and one metric to display charts.')
+        st.info('Select at least one ad to display charts.')
         return
     for offset in range(0, len(metrics), 2):
         for column, metric in zip(st.columns(2), metrics[offset:offset+2]):

@@ -27,7 +27,7 @@ def test_chart_ratios_and_actions_do_not_infer_missing_purchases():
     assert metric_value({'spend': 10, 'website_purchases': 0}, 'Cost per purchase') is None
 
 
-def test_daily_charts_render_and_metric_selection_changes_charts():
+def test_daily_charts_render_all_available_metrics_without_metric_picker():
     from streamlit.testing.v1 import AppTest
     def panel():
         from datetime import date
@@ -38,7 +38,8 @@ def test_daily_charts_render_and_metric_selection_changes_charts():
         show_daily_charts(data, date(2026, 11, 1), date(2026, 11, 14), 'CAD')
     app = AppTest.from_function(panel).run()
     assert not app.exception
-    assert len(app.get('plotly_chart')) == 4
-    app.multiselect[1].set_value(['ROAS']).run()
+    assert len(app.multiselect) == 1
+    assert len(app.get('plotly_chart')) == 7
+    app.multiselect[0].set_value([]).run()
     assert not app.exception
-    assert len(app.get('plotly_chart')) == 1
+    assert len(app.get('plotly_chart')) == 0
