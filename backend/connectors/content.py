@@ -169,7 +169,7 @@ def metric_row(report, day, timezone, metrics, *, segment="", currency=None):
     return dict(report=report, day=day, timezone=timezone, currency=currency, segment=segment, metrics=metrics)
 
 
-def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None):
+def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None, destination_page=False):
     endpoint = f"https://analyticsdata.googleapis.com/v1beta/properties/{property_id}:runReport"
     headers = google_headers(endpoint, "analytics.readonly")
     path = urlsplit(url).path
@@ -188,7 +188,17 @@ def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None)
     reports.append(("ga4_traffic", "landingPage", acquisition, [], "", traffic_dimensions))
     reports.append(("ga4_traffic", "pagePath", ("screenPageViews", "activeUsers", "userEngagementDuration"),
                     [], "", ("pagePath", *traffic_dimensions[1:])))
+    if destination_page:
+        dimensions = ("sessionSource", "sessionMedium", "sessionCampaignName")
+        reports = [
+            ("ga4_traffic", "landingPage", (*acquisition, "ecommercePurchases", "purchaseRevenue"),
+             [], "", dimensions),
+            ("ga4_traffic", "pagePath", ("screenPageViews", "activeUsers", "sessions"),
+             [("eventName", "page_view")], "", dimensions),
+        ]
     for kind, dimension, metrics, extra, segment, breakdown in reports:
+        if destination_page:
+            extra = [*extra, ("hostName", urlsplit(url).hostname)]
         if kinds is not None and kind not in kinds:
             continue
         paths = sorted({path.rstrip("/"), path.rstrip("/") + "/"})
@@ -206,7 +216,7 @@ def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None)
         while True:
             result = analytics_response(client.post(endpoint, headers=headers, json=request))
             metadata = result.get("metadata", {})
-            if metadata.get("subjectToThresholding") or metadata.get("dataLossFromOtherRow"):
+            if metadata.get("subjectToThresholding") or metadata.get("dataLossFromOtherRow") or metadata.get("samplingMetadatas"):
                 raise ContentError("GA4 returned a thresholded or aggregated report. Existing data was kept.")
             if metadata.get("schemaRestrictionResponse", {}).get("activeMetricRestrictions"):
                 raise ContentError("GA4 restricted one or more metrics. Check access to revenue data.")
@@ -218,6 +228,9 @@ def analytics_reports(client, property_id, url, start, end, utms, *, kinds=None)
                 values_by_dimension = dict(zip(breakdown, dimensions, strict=True))
                 if breakdown:
                     values_by_dimension["traffic_scope"] = "article_views" if dimension == "pagePath" else "landing_sessions"
+                if destination_page:
+                    values_by_dimension.update(destination_path=path,
+                        traffic_scope="page_view_sessions" if dimension == "pagePath" else "landing_sessions")
                 key = json.dumps(values_by_dimension, sort_keys=True) if breakdown else segment
                 yield metric_row(kind, day, metadata["timeZone"], values,
                                  currency=metadata.get("currencyCode"), segment=key)

@@ -137,6 +137,7 @@ def show_article(item, details):
 
 
 def show_facebook(item, details):
+    from frontend.organic_outcomes import LIMITATION, post_report
     rows = details["snapshots"]
     metadata = details.get("metadata", {})
     kind = facebook_kind(item, metadata)
@@ -146,8 +147,17 @@ def show_facebook(item, details):
     external_link(metadata.get("media_reference"), "Open media preview")
     st.markdown("**Latest lifetime observation in this range**")
     latest = facebook_latest(rows, kind)
-    table([{"Metric": key, "Value": latest[key], "Availability": state}
-           for key, state in latest["availability"].items()])
+    metrics, diagnostics, outcomes = post_report(details, kind)
+    for group in ("Facebook visibility", "Facebook engagement"):
+        st.markdown(f"**{group}**")
+        table([row for row in metrics if row["group"] == group])
+    table(diagnostics)
+    st.markdown("**Website outcomes**")
+    st.caption(LIMITATION)
+    table(outcomes)
+    if not outcomes:
+        st.caption("Destination GA4 data unavailable for these dates. Run the content sync to collect it.")
+    st.caption("Successful reminder signups: unavailable. A verified successful-submit event and form-specific reporting are required; clicks are not signups.")
     st.caption("Reach and impressions are unavailable in this import. Unique media viewers are shown separately.")
     if not rows:
         st.caption("No Facebook Insights observations for these dates.")

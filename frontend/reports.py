@@ -331,6 +331,7 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     article_review, facebook_review = [], []
     facebook_snapshots = {}
     post_landing = []
+    organic_metrics, organic_diagnostics, organic_outcomes = [], [], []
     search, queries, diagnostics, facebook, reels, intervals, coverage_rows = [], [], [], [], [], [], []
     for item in items:
         details = call(f"{route}/items/{item['id']}", params=params)
@@ -391,6 +392,11 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                                     "Check publication history, previews, and path reuse.")
             diagnostics.extend({**context, "observation": note} for note in observations)
         elif item["source"] == "facebook":
+            from frontend.organic_outcomes import post_report
+            metric_rows, diagnostic_rows, outcome_rows = post_report(details, facebook_kind(item, metadata))
+            organic_metrics.extend({**context, **row} for row in metric_rows)
+            organic_diagnostics.extend({**context, **row} for row in diagnostic_rows)
+            organic_outcomes.extend({**context, **row} for row in outcome_rows)
             post_landing.extend({**context, **row} for row in details.get("tagged_landing", []))
             facebook_snapshots[item["id"]] = item_snapshots
             kind = facebook_kind(item, metadata)
@@ -434,6 +440,13 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     if terms:
         report.table("Google Search queries by article", queries)
     report.table("Facebook Page post review", facebook_review)
+    from frontend.organic_outcomes import LIMITATION
+    report.table("Organic Facebook visibility and engagement", organic_metrics)
+    report.table("Organic post attribution diagnostics", organic_diagnostics)
+    report.table("Organic destination website outcomes (daily)", organic_outcomes)
+    report.note(LIMITATION)
+    report.note("Successful reminder signups are unavailable until a successful-submit event is verified. "
+                "No historical traffic has been assigned to an untagged post. Empty GA4 rows do not establish zero activity.")
     report.table("Facebook content visibility", facebook)
     report.table("Facebook reel and video performance", reels)
     report.table("Facebook lifetime interval changes", intervals)

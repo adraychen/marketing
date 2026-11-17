@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from uuid import UUID
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -113,6 +114,36 @@ def report_items(client, org, source, source_account, shop, backfill_days, force
     if status == "succeeded" and not records:
         first_error = f"No matching rows for {successful} articles through {end} ({timezone})."
     return finish(org, source, status, records, first_error)
+
+
+def organic_destinations(client, org, page, property_id, storefront, days):
+    """Refresh destination context; never assign this traffic to an individual post."""
+    source = "ga4_organic_destinations"
+    if not page or not re.fullmatch(r"[0-9]+", property_id or ""):
+        return finish(org, source, "skipped", message="Facebook Page or GA4 property is missing.")
+    end = datetime.now(ZoneInfo(environment("CONTENT_GA4_TIMEZONE", "America/Toronto"))).date() - timedelta(days=1)
+    start = end - timedelta(days=days - 1)
+    with database() as cur:
+        posts = repo.read_items(cur, org, "facebook", page)
+    cache, records, failures = {}, 0, 0
+    for post in posts:
+        try:
+            rows = []
+            paths = {urlsplit(url).path for url in post["data"].get("links", [])
+                     if urlsplit(url).scheme in ("https", "http")
+                     and urlsplit(url).hostname == urlsplit(storefront).hostname}
+            for path in sorted(paths):
+                if path not in cache:
+                    cache[path] = list(analytics_reports(client, property_id, storefront.rstrip("/") + path,
+                                                       start, end, [], destination_page=True))
+                rows.extend(cache[path])
+            with database() as cur:
+                repo.write_daily(cur, org, post["id"], property_id, ["ga4_traffic"], start, end, rows)
+            records += len(rows)
+        except SOURCE_ERRORS:
+            failures += 1
+    return finish(org, source, "partial" if failures and records else "failed" if failures else "succeeded",
+                  records, "Some destination requests failed; previous data retained." if failures else None)
 
 
 def article_indexing(client, org, site, shop):
@@ -417,6 +448,7 @@ def main():
             repo.associate(cur, org, shop, page)
         failed |= report_items(client, org, "ga4", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
         failed |= report_items(client, org, "ga4_traffic", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
+        failed |= organic_destinations(client, org, page, environment("CONTENT_GA4_PROPERTY_ID"), storefront, days)
         article_indexing(client, org, environment("CONTENT_GSC_SITE"), shop)
         failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
         failed |= post_insights(client, org, page, meta_token, version)
