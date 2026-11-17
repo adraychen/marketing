@@ -86,8 +86,8 @@ def test_demo_launch_and_all_pages(tmp_path, monkeypatch):
         assert app.success[0].value == "Draft saved."
 
         app.sidebar.radio[0].set_value("Organic Marketing").run()
-        assert app.title[0].value == "Organic Marketing"
-        assert "Facebook analytics" in [tab.label for tab in app.tabs]
+        assert app.title[0].value == "Facebook Organic"
+        assert "Page analytics" in [tab.label for tab in app.tabs]
         next(widget for widget in app.radio if widget.label == "Organic channel").set_value("Shopify Blog").run()
         assert not app.exception and not app.error
         assert "UTM Link Builder" in [tab.label for tab in app.tabs]

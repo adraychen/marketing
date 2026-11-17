@@ -237,8 +237,10 @@ def show_visibility_summary(route, items):
 
 
 def show_content_marketing(base, source):
-    st.title("Organic Marketing")
-    st.caption("Track published Shopify articles and Facebook posts alongside store and search performance.")
+    facebook = source == 'facebook'
+    st.title('Facebook Organic' if facebook else 'Shopify Blog')
+    st.caption('Published Facebook posts, post performance, and Page analytics.' if facebook else
+               'Published blog articles, website engagement, and organic search performance.')
     route = f"{base}/content"
     catalog = call(route)
     status = {item["source"]: item for item in catalog["sources"]}
@@ -247,15 +249,19 @@ def show_content_marketing(base, source):
                 "Last run": status.get(key, {}).get("finished_at"),
                 "Last success": status.get(key, {}).get("last_success_at"),
                 "Records": status.get(key, {}).get("records"), "Details": status.get(key, {}).get("message")}
-               for key, label in SOURCE_LABELS.items()])
-    campaigns = {item["slug"]: item["name"] for item in catalog["campaigns"]}
-    campaign = st.selectbox("Content campaign", [*campaigns, ""],
-                            format_func=lambda key: campaigns.get(key, "All discovered content"))
-    items = [item for item in catalog["items"]
-             if item["source"] == source and (not campaign or campaign in item["campaigns"])]
-    tabs = ["Overview", "Content performance", "Linked products & ads"]
+               for key, label in SOURCE_LABELS.items()
+               if key in ({'facebook', 'facebook_insights', 'facebook_page_insights', 'ga4_traffic'} if facebook else
+                          {'shopify', 'ga4', 'ga4_traffic', 'search_console', 'search_console_inspection'})])
+    channel_items = [item for item in catalog['items'] if item['source'] == source]
+    campaign_ids = {slug for item in channel_items for slug in item['campaigns']}
+    campaigns = {item['slug']: item['name'] for item in catalog['campaigns'] if item['slug'] in campaign_ids}
+    campaign = st.selectbox('Filter posts by campaign' if facebook else 'Filter articles by campaign', ['', *campaigns],
+                            format_func=lambda key: campaigns.get(key, 'All Facebook posts' if facebook else 'All blog articles'),
+                            key=f'organic-campaign:{base}:{source}')
+    items = [item for item in channel_items if not campaign or campaign in item['campaigns']]
+    tabs = ['Posts' if facebook else 'Articles', 'Post performance' if facebook else 'Article performance', 'Campaign links']
     if source == "facebook":
-        tabs.append("Facebook analytics")
+        tabs.append("Page analytics")
     tabs.append("UTM Link Builder")
     library, performance, associations, *additional = st.tabs(tabs)
     with library:
@@ -270,10 +276,12 @@ def show_content_marketing(base, source):
             show_item_performance(route, items)
     if source == "facebook":
         with additional[0]:
-            show_facebook_analytics(route, catalog["items"])
+            st.caption('Page analytics cover Facebook independently of the campaign filter above. The campaign filter applies to posts, post performance, campaign links, and related content in the link builder.')
+            show_facebook_analytics(route, channel_items)
     with additional[-1]:
-        show_utm_builder(base, source, catalog["items"])
+        show_utm_builder(base, source, items)
     with associations:
+        st.caption('These are shared campaign associations, not attributed results for this channel.')
         if not campaign:
             st.info("Select a content campaign to see its product and Google Ads associations.")
         else:
@@ -286,7 +294,9 @@ def show_content_marketing(base, source):
 
 def show_item_performance(route, items):
     by_id = {item["id"]: item for item in items}
-    chosen = st.selectbox("Article or post", list(by_id), format_func=lambda key: by_id[key]["title"])
+    source = items[0]['source']
+    chosen = st.selectbox('Facebook post' if source == 'facebook' else 'Blog article', list(by_id),
+                          format_func=lambda key: by_id[key]['title'], key=f'organic-item:{route}:{source}')
     item = by_id[chosen]
     external_link(item["url"], "Open published content")
     today = datetime.now(ZoneInfo("America/Toronto")).date()

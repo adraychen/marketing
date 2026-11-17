@@ -33,10 +33,10 @@ def show_utm_builder(base, source, items):
                            format_func=lambda value: content_items[value]["title"] if value else "New content")
     with st.form(f"{key}:form"):
         destination = st.text_input("Destination URL")
-        platform = st.selectbox("Marketing platform", ("Facebook", "Shopify Blog"),
-                                index=0 if source == "facebook" else 1)
+        platform = 'Facebook' if source == 'facebook' else 'Shopify Blog'
+        st.caption(f'Marketing platform: {platform} · follows the organic channel selected above.')
         campaign = st.text_input("Campaign name")
-        kind = st.selectbox("Content type", ("Post", "Reel", "Photo", "Link post", "Article"))
+        kind = st.selectbox("Content type", ('Post', 'Reel', 'Photo', 'Link post') if source == 'facebook' else ('Article',))
         content = st.text_input("Unique content identifier")
         if st.form_submit_button("Generate link"):
             st.session_state.pop(key, None)
