@@ -15,6 +15,8 @@ from backend.config import MODE
 from backend.connectors import tiktok
 from backend.connectors.meta_ads import MetaAdsError
 from backend.connectors.google_ads import GoogleAdsError
+from backend import chatgpt_ads
+from backend.connectors.chatgpt_ads import AdsError as ChatGPTAdsError, configuration as chatgpt_configuration
 from backend.jobs import SyncBusy, configured_org, connector, run_sync
 from backend.metrics import previous_period
 from backend.models import DraftInput
@@ -148,6 +150,44 @@ def delete_facebook_observation(org: str, observation_id: UUID, _editor=Depends(
     if not facebook_analytics.delete_manual(org, str(observation_id)):
         raise HTTPException(404, "Manual observation unavailable.")
     return {"deleted": True}
+
+
+@app.get("/orgs/{org}/chatgpt-ads/status")
+def chatgpt_ads_status(org: str, _member=Depends(member)):
+    if MODE != "live":
+        return {"configured": False, "schema_ready": False, "accounts": [], "runs": []}
+    try:
+        return chatgpt_ads.status(org)
+    except UndefinedTable:
+        return {"configured": bool(chatgpt_configuration(org)), "schema_ready": False, "accounts": [], "runs": []}
+    except ChatGPTAdsError as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
+@app.get("/orgs/{org}/chatgpt-ads/report")
+def chatgpt_ads_report(org: str, start: date, end: date, _member=Depends(member)):
+    if start > end or (end - start).days >= 365:
+        raise HTTPException(422, "Choose a date range of up to 365 days.")
+    if MODE != "live":
+        return chatgpt_ads.empty_report()
+    try:
+        return chatgpt_ads.report(org, start, end)
+    except UndefinedTable:
+        raise HTTPException(503, "Apply 20261118000100_chatgpt_ads.sql before syncing ChatGPT Ads.") from None
+
+
+@app.post("/orgs/{org}/chatgpt-ads/sync")
+def chatgpt_ads_sync(org: str, membership=Depends(member)):
+    if MODE != "live" or membership["role"] != "admin":
+        raise HTTPException(403, "An organization admin must synchronize ChatGPT Ads.")
+    try:
+        return chatgpt_ads.run_sync(org)
+    except chatgpt_ads.SyncBusy:
+        raise HTTPException(409, "ChatGPT Ads sync is already running.") from None
+    except UndefinedTable:
+        raise HTTPException(503, "Apply 20261118000100_chatgpt_ads.sql before syncing ChatGPT Ads.") from None
+    except ChatGPTAdsError as exc:
+        raise HTTPException(502, str(exc)) from None
 
 
 @app.get("/orgs/{org}/meta-ads/status")

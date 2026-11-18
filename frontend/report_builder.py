@@ -12,7 +12,7 @@ from frontend.reports import Report, add_ads, add_content, add_facebook_analytic
 from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
 
 SOURCES = ('Google Ads', 'Facebook Organic', 'Facebook Paid Ads', 'Shopify Blog',
-           'Shopify Store Results', 'TikTok Ads')
+           'Shopify Store Results', 'TikTok Ads', 'ChatGPT Ads')
 SYNC_TABLES = {'Google Ads sync history', 'Content source status', 'Commerce latest sync results',
                'Facebook Data Availability and API Limitations'}
 
@@ -54,12 +54,22 @@ def generate_period(report, base, catalog, accounts, selected, choices, params, 
                     weekly, compare, drafts, ai, sync_details, tiktok_rows):
     if 'Shopify Store Results' in selected and choices.get('store'):
         commerce = load_commerce(base, start, end)
+    else:
+        from backend.channels import coverage
+        commerce = {'channel_coverage': [{**row, 'state': 'unavailable',
+                     'attribution_limitations': 'Website outcomes excluded from this export scope; connection was not inspected.'}
+                     for row in coverage({})]}
+    report.table('Marketing channel coverage', commerce.get('channel_coverage', []))
+    report.note(commerce.get('comparison_note', 'Channel coverage unavailable. No channel activity has been inferred.'))
+    if 'Shopify Store Results' in selected and choices.get('store'):
         report.note(commerce.get('policy', commerce.get('error', 'Commerce unavailable.')))
         report.note(commerce.get('attribution_model', 'Order attribution unavailable.'))
         report.table('Commerce source coverage', commerce['coverage'])
         report.table('Commerce latest sync results', commerce.get('latest_runs', []))
         report.table('Shopify canonical order outcomes by channel', commerce['orders'])
         report.table('Storewide GA4 sessions and purchase outcomes', commerce['ga4'])
+        report.table('GA4 channel attribution evidence (alternative daily breakdown)', commerce.get('channel_ga4', []))
+        report.table('Shopify and GA4 channel comparison (independent measurements)', commerce.get('channel_comparison', []))
     if 'Google Ads' in selected:
         for account in accounts:
             ids = choices.get(f"google:{account['id']}", [])
@@ -113,6 +123,12 @@ def generate_period(report, base, catalog, accounts, selected, choices, params, 
         report.table('TikTok Ads daily campaign performance', rows)
         if ai:
             report.note('TikTok AI interpretation is unavailable in this export.')
+    if 'ChatGPT Ads' in selected and choices.get('chatgpt'):
+        from frontend.chatgpt_ads import load, add_report
+        try:
+            add_report(report, load(base, start, end), choices['chatgpt'])
+        except APIError as exc:
+            report.note('ChatGPT Ads unavailable: ' + str(exc))
     trim_optional(report, sync_details)
 
 
@@ -168,8 +184,13 @@ def show_report_builder(org, base, mode):
                 'Shopify Blog': 'Imported content available' if any(i['source']=='shopify' for i in catalog['items']) else 'No imported articles',
                 'Facebook Paid Ads': 'Imported paid data available' if meta_status['accounts'] else 'Configured; no successful import yet' if meta_status['configured'] else 'Not connected', 'Shopify Store Results': 'Coverage checked on generation',
                 'TikTok Ads': 'Configured; connection checked when selected' if tiktok_ready else 'Not connected'}
+    try:
+        chatgpt_state = call(f'{base}/chatgpt-ads/status')
+    except APIError:
+        chatgpt_state = {'configured': False, 'accounts': []}
+    statuses['ChatGPT Ads'] = 'Imported data available' if chatgpt_state['accounts'] else 'Configured; sync needed' if chatgpt_state['configured'] else 'Not connected'
     st.subheader('2. Sources to include')
-    selected = [source for source in SOURCES if st.checkbox(source, value=source != 'TikTok Ads' and (source != 'Facebook Paid Ads' or bool(meta_status['accounts'])),
+    selected = [source for source in SOURCES if st.checkbox(source, value=source != 'TikTok Ads' and (source != 'Facebook Paid Ads' or bool(meta_status['accounts'])) and (source != 'ChatGPT Ads' or bool(chatgpt_state['accounts'])),
                  key=f'{prefix}:source:{source}', help=statuses[source])]
     st.caption('Connection status is separate from selection. Unavailable selected sources will be flagged, never reported as zero.')
     st.dataframe([{'Source': s, 'Status': statuses[s]} for s in SOURCES], hide_index=True)
@@ -177,6 +198,17 @@ def show_report_builder(org, base, mode):
     st.caption('All available items start selected. Only checked items from checked sources appear in the report.')
     choices = {}
     for source in selected:
+        if source == 'ChatGPT Ads':
+            from frontend.chatgpt_ads import load
+            try:
+                data = load(base, start, end)
+                ids = sorted({r['campaign_id'] for r in data['daily']})
+                choices['chatgpt'] = item_checks(source, [(key, key) for key in ids], f'{prefix}:chatgpt')
+                if not ids:
+                    warnings.append('ChatGPT Ads has no imported campaigns for these dates.')
+            except APIError as exc:
+                warnings.append(str(exc))
+            continue
         if source == 'Google Ads':
             for account in accounts:
                 try:

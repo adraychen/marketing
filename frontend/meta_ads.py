@@ -8,6 +8,7 @@ from backend.metrics import previous_period, ratio
 from backend.meta_purchase_metrics import PURCHASE_NOTE, purchase_totals
 from frontend.client import APIError, call
 from frontend.views import number, table
+from backend.meta_platforms import NOTE as PLATFORM_NOTE, METRICS as PLATFORM_METRICS, reconcile
 
 
 def load_report(base,start,end):
@@ -16,10 +17,24 @@ def load_report(base,start,end):
 
 def scoped(data, campaign_ids):
     ids = set(campaign_ids)
-    return {**data, "campaigns":[row for row in data["campaigns"] if row["id"] in ids],
+    daily = [row for row in data["daily"] if row["campaign_id"] in ids]
+    platforms = [row for row in data.get("platform_daily", []) if row["campaign_id"] in ids]
+    return {**data, "platform_daily": platforms, "platform_reconciliation": reconcile(daily, platforms),
+            "campaigns":[row for row in data["campaigns"] if row["id"] in ids],
             "adsets":[row for row in data["adsets"] if row.get("campaign_id") in ids],
             "ads":[row for row in data["ads"] if row.get("campaign_id") in ids],
             "daily":[row for row in data["daily"] if row["campaign_id"] in ids]}
+
+
+def platform_coverage(data):
+    state = data.get("platform_status", {})
+    return [{"channel": "Meta Paid — " + platform.title(), "data_source": "Meta Ads publisher_platform",
+             "state": state.get("state", "unavailable") if data.get("account") else "disconnected",
+             "complete_date_coverage": data.get("platform_coverage", False), "last_successful_sync": state.get("last_successful_sync"),
+             "available_metrics": [key for key in (*PLATFORM_METRICS, "reach") if any(r.get(key) is not None for r in data.get("platform_daily", []) if r["publisher_platform"] == platform)],
+             "unavailable_metrics": [key for key in (*PLATFORM_METRICS, "reach") if not any(r.get(key) is not None for r in data.get("platform_daily", []) if r["publisher_platform"] == platform)],
+             "attribution_limitations": PLATFORM_NOTE, "tracking_or_permission_errors": state.get("error")}
+            for platform in ("facebook", "instagram")]
 
 
 def totals(data):
@@ -63,6 +78,10 @@ def add_meta_report(report,base,start,end,campaign_ids,data=None,include_ai=Fals
     report.table("Meta paid ad set settings and targeting",data["adsets"])
     report.table("Meta paid ads and creative",data["ads"])
     report.table("Meta paid daily ad performance",data["daily"])
+    report.note(PLATFORM_NOTE)
+    report.table("Meta publisher-platform channel coverage", platform_coverage(data))
+    report.table("Meta publisher-platform daily ad performance", data.get("platform_daily", []))
+    report.table("Meta publisher-platform reconciliation", data.get("platform_reconciliation", []))
     from frontend.campaign_evaluation import add_report, load
     try:
         add_report(report, load(base, start, end), campaign_ids, base, include_ai)
@@ -151,6 +170,13 @@ def show_meta_ads(base,mode):
     daily,performance,settings,creative=st.tabs(["Daily performance","Campaign performance","Campaigns & ad sets","Ads & creative"])
     with performance:
         table(campaigns(data))
+        st.markdown("**Facebook and Instagram delivery**")
+        st.caption(PLATFORM_NOTE)
+        table(platform_coverage(data))
+        table(data.get("platform_daily", []))
+        if data.get("platform_reconciliation"):
+            st.warning("Platform breakdown and unbroken delivery have gaps or disagreements. See reconciliation; totals have not been replaced.")
+            table(data["platform_reconciliation"])
         from frontend.campaign_evaluation import show
         show(base, start, end, selected)
     with settings:

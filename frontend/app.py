@@ -80,11 +80,15 @@ def app():
         show_marketing_overview(base, mode)
         return
     if nav == "Organic Marketing":
-        source = st.radio("Organic channel", ("Facebook", "Shopify Blog"), horizontal=True, key=f"organic:{org_id}")
+        source = st.radio("Organic channel", ("Facebook", "Shopify Blog", "Instagram"), horizontal=True, key=f"organic:{org_id}")
+        if source == "Instagram":
+            from frontend.instagram_organic import show
+            show()
+            return
         show_content_marketing(base, "facebook" if source == "Facebook" else "shopify")
         return
     if nav == "Paid Advertising":
-        platforms = ["All Paid", "Google Ads", "Meta Ads"]
+        platforms = ["All Paid", "Google Ads", "Meta Ads", "ChatGPT Ads"]
         if mode == "live":
             try:
                 if call(f"{base}/tiktok-ads/status")["configured"]:
@@ -97,6 +101,10 @@ def app():
             return
         if platform == "Meta Ads":
             show_meta_ads(base, mode)
+            return
+        if platform == "ChatGPT Ads":
+            from frontend.chatgpt_ads import show
+            show(base)
             return
         if platform == "TikTok Ads":
             show_tiktok_ads(base)

@@ -44,6 +44,9 @@ def show_commerce(base, start, end, prior_start, prior_end):
     if any(row.get("stale") for row in current["coverage"]):
         st.warning("Some commerce imports are over 48 hours old. Run the content sync job to refresh them.")
     with st.expander("Commerce sources, coverage, and definitions"):
+        st.caption(current.get("comparison_note", "Shopify and GA4 are independent measurements."))
+        table(current.get("channel_coverage", []))
+        table(current.get("channel_comparison", []))
         st.write(current.get("policy", "No commerce import yet."))
         st.write(current.get("attribution_model", "Order-level attribution is not available."))
         st.caption("Dates outside imported coverage remain unavailable. Revenue stays in its original currency. "
@@ -53,4 +56,6 @@ def show_commerce(base, start, end, prior_start, prior_end):
         table([{"Currency": code, **values} for code, values in totals.items()])
         table(current["orders"])
         table(current["ga4"])
+        st.caption("GA4 channel evidence is an alternative breakdown of sessions, not additional traffic.")
+        table(current.get("channel_ga4", []))
     return current

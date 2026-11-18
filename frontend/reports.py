@@ -257,6 +257,16 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts,
         and (comparable or row["day"] >= start.isoformat())
     ])
     history = call(f"{route}/sync")
+    report.table("Google Ads channel coverage", [{
+        "channel": "Google Ads — see campaign advertising_channel_type", "data_source": "Google Ads",
+        "account": account["id"], "state": "available" if complete else "unavailable",
+        "last_successful_sync": max((r.get("finished_at") or "" for r in history if r.get("status") == "succeeded"), default=None),
+        "available_metrics": [key for key in ("spend", "impressions", "clicks", "conversions", "conversion_value")
+                              if any(r.get(key) is not None for r in snapshot["performance"])],
+        "unavailable_metrics": ["Shopify completed orders", "GA4 sessions"],
+        "attribution_limitations": "Google Ads conversion definitions apply. Campaigns may include non-search inventory; no Shopify/GA4 purchases are substituted.",
+        "tracking_or_permission_errors": history[0].get("error") if history else None,
+    }])
     report.table("Google Ads sync history", [
         {key: run.get(key) for key in ("status", "counts", "created_at", "finished_at")}
         for run in history
@@ -448,6 +458,16 @@ def add_content(report, route, catalog, campaign, params, terms=False):
     report.note("Successful reminder signups are unavailable until a successful-submit event is verified. "
                 "No historical traffic has been assigned to an untagged post. Empty GA4 rows do not establish zero activity.")
     report.table("Facebook content visibility", facebook)
+    fb_run = next((r for r in catalog.get("sources", []) if r["source"] == "facebook_insights"), {})
+    fb_fields = ("reach", "impressions", "organic_distribution", "post_media_view", "post_total_media_view_unique", "reactions", "comments", "shares", "post_clicks", "link_clicks", "outbound_clicks")
+    report.table("Facebook Organic channel coverage", [{
+        "channel": "Facebook Organic Content", "data_source": "Facebook Graph API post observations",
+        "state": "available" if any(r.get(k) is not None for r in facebook for k in fb_fields) else "unavailable", "last_successful_sync": fb_run.get("last_success_at"),
+        "available_metrics": [k for k in fb_fields if any(r.get(k) is not None for r in facebook)],
+        "unavailable_metrics": [k for k in fb_fields if not any(r.get(k) is not None for r in facebook)],
+        "attribution_limitations": "Lifetime content observations, not website traffic attribution or proof of organic-only distribution. See per-post permissions and UTMs.",
+        "tracking_or_permission_errors": fb_run.get("message"),
+    }])
     report.table("Facebook reel and video performance", reels)
     report.table("Facebook lifetime interval changes", intervals)
     report.note("Facebook interval changes compare observations for the same API version. Decreases may be corrections. "

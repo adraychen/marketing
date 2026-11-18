@@ -26,6 +26,8 @@ Open [the local dashboard](http://127.0.0.1:8501). Start at Overview and open Pa
 
 ## Configure Supabase
 
+ChatGPT Ads reporting setup is documented in [CHATGPT_ADS_SETUP.md](CHATGPT_ADS_SETUP.md). It uses an Advertiser API key stored only on the backend and sync worker, with a dedicated reporting migration.
+
 1. Create a Supabase project. Apply [the versioned migration](supabase/migrations/20261105000100_stage_one.sql) as the database owner through the SQL Editor or your Supabase CLI workflow.
    If the original unprefixed Stage 1 schema is already installed, run [the upgrade SQL](supabase/upgrade_existing_stage_one.sql) instead. It renames the existing tables in place and preserves data and memberships. Deploy the updated backend after running the upgrade.
 2. Create an email/password user under **Authentication → Users**. Copy their User UID. Run the following in the SQL Editor, replacing the two placeholders with the organization's name and the user's UUID. Copy the organization ID returned by the query.

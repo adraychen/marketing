@@ -78,6 +78,20 @@ def show_marketing_overview(base, mode, *, paid_only=False):
             rows.append({"Platform": "TikTok Ads", "Status": "Connection status unavailable"})
         else:
             rows.append({"Platform": "TikTok Ads", "Status": "Report on demand" if tiktok else "Not connected"})
+    try:
+        from frontend.chatgpt_ads import load as load_chatgpt, totals as chatgpt_totals
+        data = load_chatgpt(base, start, end)
+        if data["account"]:
+            values = chatgpt_totals(data["daily"])
+            rows.append({"Platform": "ChatGPT Ads", "Account": data["account"].get("name"),
+                         "Currency": data["account"]["currency_code"],
+                         "Status": "Stale import" if data["stale"] else "Imported" if data["coverage"] else "Partial coverage",
+                         "Spend": values["spend"], "Impressions": values["impressions"], "Clicks": values["clicks"],
+                         "ChatGPT goal conversions": values["conversions"], "ChatGPT attributed sales": values["order_created_attributed_sales"]})
+        else:
+            rows.append({"Platform": "ChatGPT Ads", "Status": "No successful import yet"})
+    except APIError:
+        rows.append({"Platform": "ChatGPT Ads", "Status": "Not connected or migration needed"})
     table(rows)
     for currency in sorted({row["Currency"] for row in rows if row.get("Spend") is not None}):
         spend = sum(row["Spend"] for row in rows if row.get("Currency") == currency and row.get("Spend") is not None)

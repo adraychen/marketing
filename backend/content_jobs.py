@@ -449,6 +449,14 @@ def main():
         failed |= report_items(client, org, "ga4", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
         failed |= report_items(client, org, "ga4_traffic", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
         failed |= organic_destinations(client, org, page, environment("CONTENT_GA4_PROPERTY_ID"), storefront, days)
+        if re.fullmatch(r"[0-9]+", environment("CONTENT_GA4_PROPERTY_ID")):
+            from backend.channel_data import sync as sync_channels
+            try:
+                count = sync_channels(client, org, environment("CONTENT_GA4_PROPERTY_ID"),
+                                      environment("CONTENT_GA4_TIMEZONE", "America/Toronto"), days)
+                finish(org, "ga4_channels", "succeeded", count)
+            except SOURCE_ERRORS as exc:
+                failed |= finish(org, "ga4_channels", "failed", message=message(exc))
         article_indexing(client, org, environment("CONTENT_GSC_SITE"), shop)
         failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
         failed |= post_insights(client, org, page, meta_token, version)
@@ -466,6 +474,20 @@ def main():
         except (MetaAdsError,ValueError) as exc:
             text = str(exc) if isinstance(exc,MetaAdsError) else "Check META_ADS_LOOKBACK_DAYS (1-365)."
             print(f"meta_ads: failed. {text}",flush=True)
+            failed = True
+    if environment("OPENAI_ADS_ORGANIZATION_ID") == org:
+        from backend.chatgpt_ads import run_sync as sync_chatgpt, SyncBusy as ChatGPTSyncBusy
+        from backend.connectors.chatgpt_ads import AdsError
+        try:
+            sync_chatgpt(org)
+            print("chatgpt_ads: succeeded", flush=True)
+        except ChatGPTSyncBusy:
+            print("chatgpt_ads: skipped; sync already running", flush=True)
+        except UndefinedTable:
+            print("chatgpt_ads: apply 20261118000100_chatgpt_ads.sql", flush=True)
+            failed = True
+        except AdsError as exc:
+            print(f"chatgpt_ads: {exc}", flush=True)
             failed = True
     return int(failed)
 

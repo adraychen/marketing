@@ -7,6 +7,7 @@ from psycopg2.extras import Json, execute_values
 
 from backend.connectors.content import SHOPIFY_VERSION, ContentError, analytics_response, google_headers, response_data
 from backend.repositories import database
+from backend.channels import classify, owned_tags, coverage as channel_coverage, comparisons
 
 CONTEXT_QUERY = """
 query CommerceContext {
@@ -54,6 +55,7 @@ def shopify_query(client, shop, token, query, variables=None):
 
 
 def channel_for(utm):
+    """Legacy storage label retained for audit; reports use channels.classify instead."""
     source = (utm.get("source") or "").lower()
     medium = (utm.get("medium") or "").lower()
     if source in {"facebook", "fb"} and medium == "organic_social":
@@ -228,11 +230,13 @@ def import_sessions(client, org, property_id, zone, days, detailed=False):
 def summary(org, start, end):
     result = {"policy": POLICY, "attribution_model": ATTRIBUTION, "orders": [], "ga4": [], "coverage": [], "latest_runs": []}
     with database() as cur:
+        cur.execute("select source,external_id,data,published_at from marketing_content_items where organization_id=%s and source='facebook'", (org,))
+        owned = owned_tags(cur.fetchall())
         cur.execute("select * from marketing_commerce_coverage where organization_id=%s order by source,account", (org,))
         result["coverage"] = cur.fetchall()
         cur.execute("""select distinct on (source) source,status,records,message,finished_at
                        from marketing_content_sync_runs where organization_id=%s
-                       and source in ('shopify_orders','ga4_store') order by source,finished_at desc""", (org,))
+                       and source in ('shopify_orders','ga4_store','ga4_channels') order by source,finished_at desc""", (org,))
         result["latest_runs"] = cur.fetchall()
         for row in result["coverage"]:
             row["complete"] = row["start_day"] <= start <= end <= row["end_day"]
@@ -240,16 +244,18 @@ def summary(org, start, end):
             if not row["complete"]:
                 continue
             if row["source"] == "shopify_orders":
-                cur.execute("""select channel,currency,count(*) as purchases,sum(amount) as revenue,
+                cur.execute("""select channel as stored_channel,utm,currency,min(created_at) as first_order_at,count(*) as purchases,sum(amount) as revenue,
                                count(*) filter (where attributed) as attributed_purchases,
                                sum(case when attributed then amount else 0 end) as attributed_revenue
                                from marketing_shopify_orders
                                where organization_id=%s and shop=%s and eligible
                                  and (created_at at time zone %s)::date between %s and %s
-                               group by channel,currency order by channel,currency""",
+                               group by channel,utm,currency order by channel,currency""",
                             (org, row["account"], row["timezone"], start, end))
                 rows = cur.fetchall()
-                result["orders"].extend({**entry, "shop": row["account"]} for entry in rows)
+                result["orders"].extend({**entry, **classify(entry["utm"], owned, occurred_at=entry["first_order_at"]), "shop": row["account"],
+                                         "measurement_source": "Shopify canonical orders",
+                                         "timezone": row["timezone"], "start": start, "end": end} for entry in rows)
                 if not rows:
                     result["orders"].append({"shop": row["account"], "currency": row["currency"], "channel": "No eligible orders",
                                               "purchases": 0, "revenue": 0, "attributed_purchases": 0, "attributed_revenue": 0})
@@ -263,6 +269,19 @@ def summary(org, start, end):
                               from marketing_ga4_store_daily where organization_id=%s and property_id=%s
                               and day between %s and %s group by source,medium,campaign order by source,medium,campaign""",
                             (org, row["account"], start, end))
-                result["ga4"].extend({**entry, "property_id": row["account"], "currency": row["currency"]}
+                result["ga4"].extend({**entry, **classify({k: entry[k] for k in ("source", "medium", "campaign")}, owned), "property_id": row["account"], "currency": row["currency"],
+                                     "measurement_source": "GA4 session attribution", "timezone": row["timezone"], "start": start, "end": end}
                                      for entry in cur.fetchall())
+            if row["source"] == "ga4_channels":
+                from backend.channel_data import report_rows
+                cur.execute("select day,dimensions,metrics from marketing_channel_daily where organization_id=%s and property_id=%s and day between %s and %s order by day,segment",
+                            (org, row["account"], start, end))
+                result.setdefault("channel_ga4", []).extend({**entry, "property_id": row["account"], "timezone": row["timezone"],
+                                                            "currency": row["currency"], "start": start, "end": end} for entry in report_rows(cur.fetchall(), owned, row["timezone"]))
+    result["channel_coverage"] = channel_coverage(result)
+    result["channel_comparison"] = comparisons(result)
+    result["comparison_note"] = ("Same requested dates; Shopify order-creation dates and GA4 session attribution use their reported time zones. "
+                                 "Do not add or force-match purchases or revenue across sources. Shopify has no imported traffic sessions; "
+                                 "unready journeys and missing UTMs remain unattributed. The separate GA4 channel evidence table retains manual UTMs; "
+                                 "it is another view of sessions, not additional sessions to add to storewide totals.")
     return result

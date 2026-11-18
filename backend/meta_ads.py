@@ -7,6 +7,7 @@ from psycopg2.extras import Json, execute_values
 
 from backend.connectors.meta_ads import MetaAdsError, Reader, configuration, fetch
 from backend.repositories import database
+from backend.meta_platforms import fetch_platforms, reconcile
 
 POLICY = ("Meta paid delivery across all placements in the configured ad account, not Facebook-only placement data. "
           "Daily ad rows use account timezone, ad-set unified attribution, and action_report_time=impression. "
@@ -95,7 +96,33 @@ def run_sync(org, days=90):
                 end = datetime.now(ZoneInfo(identity["timezone_name"])).date()-timedelta(days=1)
                 first = end-timedelta(days=days-1)
                 account,resources,metrics = fetch(client,config,first,end)
-            return write_import(cur,org,config,account,resources,metrics,first,end)
+                cur.execute("select to_regclass('public.marketing_meta_platform_daily') as present")
+                platform_ready = bool(cur.fetchone().get("present"))
+                cur.execute("select data from marketing_meta_ads_accounts where organization_id=%s and account_id=%s",
+                            (org, config["account_id"]))
+                previous = cur.fetchone() or {}
+                platform_state = (previous.get("data") or {}).get("publisher_platform", {})
+                platform_rows = None
+                if platform_ready:
+                    try:
+                        platform_rows = fetch_platforms(client, config, first, end)
+                        platform_state = {"state": "available", "start": str(first), "end": str(end),
+                                          "last_successful_sync": datetime.now(timezone.utc).isoformat(),
+                                          "error": None, "reconciliation": reconcile(metrics, platform_rows)}
+                    except (MetaAdsError, httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+                        platform_state = {**platform_state, "state": "unavailable", "error":
+                                          str(exc) if isinstance(exc, MetaAdsError) else "Platform request failed; prior data retained."}
+                else:
+                    platform_state = {"state": "unavailable", "error": "Apply the Meta platform delivery migration before syncing."}
+                account["publisher_platform"] = platform_state
+            counts = write_import(cur,org,config,account,resources,metrics,first,end)
+            if platform_rows is not None:
+                cur.execute("delete from marketing_meta_platform_daily where organization_id=%s and account_id=%s and day between %s and %s",
+                            (org, config["account_id"], first, end))
+                if platform_rows:
+                    execute_values(cur, "insert into marketing_meta_platform_daily(organization_id,account_id,ad_id,day,publisher_platform,data) values %s",
+                                   [(org, config["account_id"], r["ad_id"], r["day"], r["publisher_platform"], Json(r)) for r in platform_rows])
+            return counts
     except SyncBusy:
         raise
     except (MetaAdsError,httpx.HTTPError,KeyError,ValueError,TypeError,OverflowError) as exc:
@@ -122,6 +149,18 @@ def report(org,start,end):
             result[row["kind"]].append({**row["data"], "last_seen_at":row["last_seen_at"]})
         cur.execute("select data from marketing_meta_ads_daily where organization_id=%s and account_id=%s and day between %s and %s order by day,ad_id",(org,account_id,start,end))
         result["daily"] = [row["data"] for row in cur.fetchall()]
+        result["platform_status"] = account["data"].get("publisher_platform", {"state": "unavailable", "error": "No platform sync recorded"})
+        state = result["platform_status"]
+        result["platform_coverage"] = bool(state.get("start") and state.get("end") and state["start"] <= str(start) <= str(end) <= state["end"])
+        result["platform_daily"] = []
+        if result["platform_status"].get("last_successful_sync"):
+            cur.execute("select data from marketing_meta_platform_daily where organization_id=%s and account_id=%s and day between %s and %s order by day,ad_id,publisher_platform",
+                        (org, account_id, start, end))
+            result["platform_daily"] = [{**row["data"], "account_id": account_id,
+                                         "currency": account["data"].get("currency"), "timezone": account["data"].get("timezone_name"),
+                                         "api_version": account["data"].get("api_version"), "measurement_source": "Meta Ads publisher_platform"}
+                                        for row in cur.fetchall()]
+        result["platform_reconciliation"] = reconcile(result["daily"], result["platform_daily"])
     # Insights can include inaccessible/deleted resources absent from metadata edges.
     for metric in result["daily"]:
         for kind,identifier,name in (("campaigns","campaign_id","campaign_name"),("adsets","adset_id","adset_name"),("ads","ad_id","ad_name")):
