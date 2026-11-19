@@ -280,6 +280,10 @@ def show_content_marketing(base, source):
         if items:
             show_visibility_summary(route, items)
     with performance:
+        if source == "shopify":
+            from frontend.organic_summary import show_blog_details
+            show_blog_details(base)
+            st.subheader("Individual article performance")
         if not items:
             st.info("No items are linked to this campaign yet.")
         else:

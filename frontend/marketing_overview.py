@@ -146,34 +146,5 @@ def show_marketing_overview(base, mode, *, paid_only=False):
     except APIError as exc:
         st.warning(str(exc))
         return
-    by_source = {row["source"]: row for row in catalog["sources"]}
-    rows = []
-    for label, source in (("Facebook Organic", "facebook"), ("Shopify Blog / Organic Search", "shopify")):
-        published = [row for row in catalog["items"] if row["source"] == source and row.get("published_at")]
-        current = sum(start.isoformat() <= row["published_at"][:10] <= end.isoformat() for row in published)
-        prior = sum(prior_start.isoformat() <= row["published_at"][:10] <= prior_end.isoformat() for row in published)
-        sync = by_source.get(source, {})
-        rows.append({"Channel": label, "Content published (UTC)": current if published or sync else None,
-                     "Previous period": prior if published or sync else None,
-                     "Latest discovery": sync.get("finished_at"), "Attributed Shopify purchases": None})
-    rows.append({"Channel": "Other / Direct / Unattributed", "Attributed Shopify purchases": None})
-    table(rows)
-    st.caption("Publication counts reflect imported items. Facebook views and reach are available under Organic Marketing.")
-    st.markdown("**Shopify article performance**")
-    organic = []
-    for period, first, last in (("Selected", start, end), ("Previous", prior_start, prior_end)):
-        try:
-            result = call(f"{base}/content/organic-summary", params={"start": str(first), "end": str(last)})
-        except APIError as exc:
-            st.warning(f"{period} period · {exc}")
-            continue
-        for entry in result["rows"]:
-            organic.append({"Period": period, "Source": "Search Console" if entry["report"] == "gsc_page" else "GA4",
-                            "Property": entry["source_account"], "Currency": entry["currency"],
-                            "Article views": entry["article_views"], "Article landing sessions": entry["landing_sessions"],
-                            "GA4 purchases in article landing sessions": entry["landing_purchases"],
-                            "GA4 revenue in article landing sessions": entry["landing_revenue"],
-                            "Search clicks": entry["search_clicks"], "Search impressions": entry["search_impressions"]})
-    table(organic)
-    st.caption("GA4 landing-session outcomes describe sessions that began on an article. "
-               "They do not identify unique Shopify orders or establish that the article caused a purchase.")
+    from frontend.organic_summary import show_overview
+    show_overview(base, catalog, start, end)
