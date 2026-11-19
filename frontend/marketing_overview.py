@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from backend.metrics import previous_period, summarize
+from backend.metrics import previous_period, ratio, summarize
 from frontend.client import APIError, call
 from frontend.commerce import show_commerce
 from frontend.meta_ads import load_report as load_meta_report, totals as meta_totals
@@ -30,6 +30,50 @@ def google_rows(base, start, end):
                "Impressions": totals.get("impressions"), "Clicks": totals.get("clicks"),
                "Previous clicks": prior.get("clicks"), "Google Ads conversions": totals.get("conversions"),
                "Google Ads conversion value": totals.get("value"), "Google Ads ROAS": totals.get("roas")}
+
+
+def show_paid_summary(rows):
+    """A compact delivery comparison; platform-specific outcomes stay in paid reports."""
+    cards = []
+    for currency in sorted({r["Currency"] for r in rows if r.get("Spend") is not None}):
+        spend = sum(r["Spend"] for r in rows if r.get("Currency") == currency and r.get("Spend") is not None)
+        cards.append((f"Reported spend · {currency}", number(spend, "money", currency)))
+    if not cards:
+        cards.append(("Reported spend", "Not available"))
+    for key in ("Impressions", "Clicks"):
+        values = [r[key] for r in rows if r.get(key) is not None]
+        cards.append((f"Reported {key.lower()}", f"{sum(values):,.0f}" if values else "Not available"))
+    columns = st.columns(min(3, len(cards)))
+    for index, (label, value) in enumerate(cards):
+        columns[index % len(columns)].metric(label, value)
+
+    counts = {platform: sum(r["Platform"] == platform for r in rows) for platform in {r["Platform"] for r in rows}}
+    statuses = {"Imported": "Available", "Partial coverage": "Partial period", "Stale import": "Needs refresh",
+                "No account connected": "Not connected", "Not connected": "Not connected",
+                "No successful paid import yet": "Not synced", "No successful import yet": "Not synced",
+                "Report on demand": "Load in Paid Advertising"}
+    summary = []
+    for row in rows:
+        label = row["Platform"]
+        if counts[label] > 1:
+            label += " · " + (row.get("Account") or "Unknown account")
+        currency = row.get("Currency", "")
+        summary.append({"Platform": label,
+                        "Spend": number(row.get("Spend"), "money", currency),
+                        "Impressions": f"{row['Impressions']:,.0f}" if row.get("Impressions") is not None else "—",
+                        "Clicks": f"{row['Clicks']:,.0f}" if row.get("Clicks") is not None else "—",
+                        "CTR": number(ratio(row.get("Clicks"), row.get("Impressions")), "percent", currency),
+                        "Avg. CPC": number(ratio(row.get("Spend"), row.get("Clicks")), "money", currency),
+                        "Data status": statuses.get(row.get("Status"), "Unavailable")})
+    table(summary)
+    st.caption("Reported totals include available data only. — means unavailable or an undefined ratio; 0 means reported zero. "
+               "CTR and average CPC are calculated from reported clicks, impressions and spend. Meta clicks include all ad clicks.")
+    st.caption("Open Paid Advertising for campaign results, daily charts, conversions, revenue and ROAS. "
+               "Each platform uses its own conversion definitions and reporting time zone.")
+    if any(row.get("Status") != "Imported" for row in rows):
+        with st.expander("Data availability"):
+            table([{"Platform": row["Platform"], "Account": row.get("Account"), "Status": row.get("Status")}
+                   for row in rows if row.get("Status") != "Imported"])
 
 
 def show_marketing_overview(base, mode, *, paid_only=False):
@@ -92,15 +136,7 @@ def show_marketing_overview(base, mode, *, paid_only=False):
             rows.append({"Platform": "ChatGPT Ads", "Status": "No successful import yet"})
     except APIError:
         rows.append({"Platform": "ChatGPT Ads", "Status": "Not connected or migration needed"})
-    table(rows)
-    for currency in sorted({row["Currency"] for row in rows if row.get("Spend") is not None}):
-        spend = sum(row["Spend"] for row in rows if row.get("Currency") == currency and row.get("Spend") is not None)
-        st.metric(f"Available paid spend · {currency}", number(spend, "money", currency))
-    clicks = [row["Clicks"] for row in rows if row.get("Clicks") is not None]
-    if clicks:
-        st.metric("Available paid campaign clicks", f"{sum(clicks):,}")
-    st.caption("Google Ads conversions follow account conversion settings and can include actions other than purchases. "
-               "Spend and clicks reflect the imported rows shown above.")
+    show_paid_summary(rows)
     if paid_only:
         return
 
