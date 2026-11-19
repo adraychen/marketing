@@ -154,6 +154,25 @@ def organic_summary(org, start, end):
         return cur.fetchall()
 
 
+def organic_post_summary(org, start, end):
+    """One latest observation per Facebook item published in the UTC date cohort."""
+    with database() as cur:
+        cur.execute("""
+            select i.id, s.metrics, s.observed_at
+            from marketing_content_items i
+            left join lateral (
+                select metrics, observed_at from marketing_content_metric_snapshots
+                where organization_id=i.organization_id and item_id=i.id
+                    and observed_day between %s and %s
+                order by observed_at desc limit 1
+            ) s on true
+            where i.organization_id=%s and i.source='facebook'
+                and (i.published_at at time zone 'UTC')::date between %s and %s
+            order by i.id
+        """, (start, end, org, start, end))
+        return cur.fetchall()
+
+
 def details(org, item_id, start, end):
     with database() as cur:
         cur.execute("select data, external_id from marketing_content_items where organization_id=%s and id=%s",

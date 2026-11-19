@@ -100,6 +100,18 @@ def organic_summary(org: str, start: date, end: date, _member=Depends(member)):
     return {"rows": rows}
 
 
+@app.get("/orgs/{org}/content/organic-post-summary")
+def organic_post_summary(org: str, start: date, end: date, _member=Depends(member)):
+    if start > end or end - start > timedelta(days=365):
+        raise HTTPException(422, "Choose a valid date range of up to 366 days.")
+    if MODE == "demo":
+        return {"rows": []}
+    try:
+        return {"rows": content_repository.organic_post_summary(org, start, end)}
+    except UndefinedTable:
+        raise HTTPException(503, "Organic post performance data has not been set up.") from None
+
+
 @app.get("/orgs/{org}/content/facebook-analytics")
 def facebook_analytics_report(org: str, start: date, end: date, membership=Depends(member)):
     if start > end or end - start > timedelta(days=365):

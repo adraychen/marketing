@@ -19,40 +19,61 @@ def headline(rows, report, field):
     return f"{matches[0][field]:,.0f}"
 
 
+def post_total(rows, fields):
+    # Missing observations must not become zeros or misleading partial totals.
+    values = [(row.get("metrics") or {}).get(field) for row in rows for field in fields]
+    if not values or any(type(value) not in (int, float) for value in values):
+        return "—"
+    return f"{sum(values):,.0f}"
+
+
 def show_overview(base, catalog, start, end):
     runs = {row["source"]: row for row in catalog["sources"]}
+
+    def published(source):
+        items = [r for r in catalog["items"] if r["source"] == source and r.get("published_at")]
+        count = sum(str(start) <= r["published_at"][:10] <= str(end) for r in items)
+        return f"{count:,}" if items or runs.get(source, {}).get("status") == "succeeded" else "—"
+
     try:
         blog = blog_rows(base, start, end)
         blog_status = "Reported data" if blog else "No reported data"
     except APIError:
         blog, blog_status = [], "Unavailable"
-    audience = "Followers: —"
-    fb_status = "Unavailable"
+    st.markdown("#### Shopify Blog")
+    table([{"Articles published": published("shopify"),
+            "Article views": headline(blog, "ga4_views", "article_views"),
+            "Landing sessions": headline(blog, "ga4_landing", "landing_sessions"),
+            "Search impressions": headline(blog, "gsc_page", "search_impressions"),
+            "Search clicks": headline(blog, "gsc_page", "search_clicks"),
+            "Data status": blog_status}])
+    st.caption("GA4 article views and landing sessions; Search Console search impressions and clicks. "
+               "Metrics cover reported dates in the selected period. Published counts use UTC. "
+               "— means unavailable or multiple reporting properties. Article details are under Organic Marketing → Shopify Blog.")
+
     try:
-        data = call(f"{base}/content/facebook-analytics", params={"start": str(start), "end": str(end)})
-        followers = [r for r in data["page"] if r["metric"] == "followers_count" and r.get("value") is not None
-                     and str(start) <= r["day"] <= str(end)]
-        if followers and len({r["page_id"] for r in followers}) == 1:
-            latest = max(followers, key=lambda r: (r["day"], r["collected_at"]))
-            audience = f"{latest['value']:,.0f} Page followers · observed {latest['day']}"
-            fb_status = "Latest observation"
+        posts = call(f"{base}/content/organic-post-summary",
+                     params={"start": str(start), "end": str(end)})["rows"]
+        fb_status = "Lifetime observations" if posts else "No observations"
     except APIError:
-        pass
-    result = []
-    for source, label, metrics, status in (
-        ("facebook", "Facebook Organic", audience, fb_status),
-        ("shopify", "Shopify Blog", f"{headline(blog, 'ga4_views', 'article_views')} article views · "
-         f"{headline(blog, 'ga4_landing', 'landing_sessions')} landing sessions · "
-         f"{headline(blog, 'gsc_page', 'search_clicks')} search clicks", blog_status),
-    ):
-        items = [r for r in catalog["items"] if r["source"] == source and r.get("published_at")]
-        count = sum(str(start) <= r["published_at"][:10] <= str(end) for r in items)
-        published = f"{count:,}" if items or runs.get(source, {}).get("status") == "succeeded" else "—"
-        result.append({"Channel": label, "Content published": published, "Key metrics": metrics, "Data status": status})
-    table(result)
-    st.caption("Published counts use UTC. Followers are a Page audience snapshot, not period reach. "
-               "Blog metrics cover reported dates; — means unavailable or multiple reporting properties. "
-               "Open Organic Marketing for post, article and source details.")
+        posts, fb_status = [], "Unavailable"
+    fields = {"Media views": ("post_media_view",),
+              "Interactions": ("reactions", "comments", "shares"),
+              "Post clicks": ("post_clicks",)}
+    totals = {label: post_total(posts, keys) for label, keys in fields.items()}
+    if posts and "—" in totals.values():
+        fb_status = "Partial / unavailable metrics"
+    st.markdown("#### Meta posts and Reels")
+    table([{"Platform": "Facebook", "Content published": published("facebook"),
+            **totals, "Data status": fb_status},
+           {"Platform": "Instagram", "Content published": "—",
+            **{label: "—" for label in fields}, "Data status": "Untracked"}])
+    st.caption("Facebook metrics are lifetime totals for imported posts and Reels published in the selected UTC period, "
+               "using each item's latest observation within that period—not activity during the period. "
+               "Interactions = reactions + comments + shares; a total is unavailable if any included item lacks a component. "
+               "Post clicks include more than website link clicks. Views may include paid distribution; they are not impressions or unique reach.")
+    st.caption("Instagram content tracking is not connected. Instagram referrals are not attributed to owned posts or Reels. "
+               "Post details and measurement limitations remain under Organic Marketing.")
 
 
 def show_blog_details(base):
