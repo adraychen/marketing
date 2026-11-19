@@ -80,7 +80,7 @@ def search_report(daily):
         st.caption(f"{account} · Search Console dates")
         metrics = search_totals(entries)
         cols = st.columns(4)
-        cols[0].metric("Search clicks", f"{metrics['clicks']:,}")
+        cols[0].metric("Google search clicks", f"{metrics['clicks']:,}")
         cols[1].metric("Impressions", f"{metrics['impressions']:,}")
         cols[2].metric("CTR", f"{metrics['ctr']:.2%}" if metrics["ctr"] is not None else "—")
         cols[3].metric("Avg. position", f"{metrics['position']:.1f}" if metrics["position"] is not None else "—")
@@ -234,8 +234,8 @@ def show_visibility_summary(route, items):
             impressions = sum(row["impressions"] for row in rows)
             clicks = sum(row["clicks"] for row in rows)
             columns = st.columns(3)
-            columns[0].metric(f"Search impressions · {prop}", f"{impressions:,}")
-            columns[1].metric("Search clicks", f"{clicks:,}")
+            columns[0].metric(f"Google search impressions · {prop}", f"{impressions:,}")
+            columns[1].metric("Google search clicks", f"{clicks:,}")
             columns[2].metric("Search CTR", f"{clicks / impressions:.2%}" if impressions else "—")
     if not facebook:
         return
@@ -265,6 +265,25 @@ def show_content_marketing(base, source):
     channel_items = [item for item in catalog['items'] if item['source'] == source]
     campaign_ids = {slug for item in channel_items for slug in item['campaigns']}
     campaigns = {item['slug']: item['name'] for item in catalog['campaigns'] if item['slug'] in campaign_ids}
+    if not facebook:
+        from frontend.organic_summary import show_article_table
+        articles, associations, builder = st.tabs(['Articles', 'Campaign links', 'UTM Link Builder'])
+        with articles:
+            show_article_table(route, channel_items)
+        with associations:
+            campaign = st.selectbox('Campaign associations', ['', *campaigns],
+                                    format_func=lambda key: campaigns.get(key, 'Choose a campaign'),
+                                    key=f'blog-associations:{base}')
+            if campaign:
+                links = call(f"{route}/campaigns/{campaign}/links")
+                st.caption('Shared campaign associations, not attributed article results.')
+                st.markdown('**Shopify products**')
+                table(links['products'])
+                st.markdown('**Related Google Ads campaigns**')
+                table(links['ads'])
+        with builder:
+            show_utm_builder(base, source, channel_items)
+        return
     campaign = st.selectbox('Filter posts by campaign' if facebook else 'Filter articles by campaign', ['', *campaigns],
                             format_func=lambda key: campaigns.get(key, 'All Facebook posts' if facebook else 'All blog articles'),
                             key=f'organic-campaign:{base}:{source}')

@@ -44,8 +44,8 @@ def show_overview(base, catalog, start, end):
     table([{"Articles published": published("shopify"),
             "Article views": headline(blog, "ga4_views", "article_views"),
             "Landing sessions": headline(blog, "ga4_landing", "landing_sessions"),
-            "Search impressions": headline(blog, "gsc_page", "search_impressions"),
-            "Search clicks": headline(blog, "gsc_page", "search_clicks"),
+            "Google search impressions": headline(blog, "gsc_page", "search_impressions"),
+            "Google search clicks": headline(blog, "gsc_page", "search_clicks"),
             "Data status": blog_status}])
     st.caption("GA4 article views and landing sessions; Search Console search impressions and clicks. "
                "Metrics cover reported dates in the selected period. Published counts use UTC. "
@@ -76,6 +76,53 @@ def show_overview(base, catalog, start, end):
                "Post details and measurement limitations remain under Organic Marketing.")
 
 
+def article_row(item, daily):
+    result = {"Title": item["title"], "Published": item.get("published_at")}
+    for label, report, metric in (
+        ("Article views", "ga4_views", "screenPageViews"),
+        ("Article landing sessions", "ga4_landing", "sessions"),
+        ("Purchases in article landing sessions", "ga4_landing", "ecommercePurchases"),
+        ("Revenue in article landing sessions", "ga4_landing", "purchaseRevenue"),
+        ("Google search clicks", "gsc_page", "clicks"),
+        ("Google search impressions", "gsc_page", "impressions"),
+    ):
+        rows = [r for r in daily if r["report"] == report]
+        scopes = {(r["source_account"], r.get("currency"), r.get("timezone")) for r in rows}
+        values = [r["metrics"].get(metric) for r in rows]
+        if len(scopes) != 1 or not values or any(v is None for v in values):
+            result[label] = "—"
+        elif metric == "purchaseRevenue":
+            currency = rows[0].get("currency")
+            result[label] = f"{currency} {sum(values):,.2f}" if currency else "—"
+        else:
+            result[label] = f"{sum(values):,.0f}"
+    return result
+
+
+def show_article_table(route, items):
+    today = datetime.now(ZoneInfo("America/Toronto")).date()
+    dates = st.date_input("Article reporting dates", (today-timedelta(days=30), today-timedelta(days=1)),
+                          max_value=today, key=f"article-table:{route}")
+    if len(dates) != 2 or not 0 <= (dates[1]-dates[0]).days <= 365:
+        return
+    rows = []
+    for item in items:
+        try:
+            details = call(f"{route}/items/{item['id']}", params={"start": str(dates[0]), "end": str(dates[1])})
+            daily = details["daily"]
+        except APIError:
+            daily = []
+            st.warning(f"Performance unavailable for {item['title']}.")
+        rows.append(article_row(item, daily))
+    table(rows)
+    st.caption("All imported articles. Published timestamps use UTC; metrics cover reported dates in the selected period. "
+               "— means unavailable or multiple reporting properties, not zero.")
+    st.caption("Google search clicks are clicks from Google organic search results (Search Console). Article views are GA4 page views "
+               "from all sources, including repeat views. Google search impressions count appearances in Google search results.")
+    st.caption("Landing sessions begin on the article. Purchases and revenue are GA4 outcomes in those sessions, "
+               "not canonical Shopify orders or proof that the article caused a purchase. Source reporting time zones may differ.")
+
+
 def show_blog_details(base):
     st.subheader("Shopify blog performance")
     st.caption("All blog articles, independent of the campaign filter. Views, landing sessions and search results are separate measurements.")
@@ -99,6 +146,6 @@ def show_blog_details(base):
                      "Article views": r["article_views"], "Article landing sessions": r["landing_sessions"],
                      "GA4 purchases in article landing sessions": r["landing_purchases"],
                      "GA4 revenue in article landing sessions": r["landing_revenue"],
-                     "Search clicks": r["search_clicks"], "Search impressions": r["search_impressions"]} for r in entries)
+                     "Google search clicks": r["search_clicks"], "Google search impressions": r["search_impressions"]} for r in entries)
     table(rows)
     st.caption("GA4 landing-session outcomes are not unique Shopify orders or proof that an article caused a purchase.")
