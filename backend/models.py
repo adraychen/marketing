@@ -43,6 +43,8 @@ class Daily(BaseModel):
     interactions: int
     conversions: float
     value: float | None
+    search_budget_lost_impression_share: float | None = None
+    search_rank_lost_impression_share: float | None = None
 
 
 class ImportBatch(BaseModel):

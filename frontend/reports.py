@@ -256,6 +256,14 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts,
          "Data status": "Available" if complete else "Partial period"}
         for row in totals if row["period"] == "Selected"])
     report.table("Google Ads daily trend", daily)
+    from frontend.google_diagnostics import NOTE, tables
+    campaign_summary, campaign_days, campaign_terms = tables(snapshot, start, end, currency)
+    report.note(NOTE)
+    report.table("Google Ads campaign diagnostics", campaign_summary)
+    report.table("Google Ads daily campaign diagnostics", campaign_days)
+    if terms:
+        report.table("Google Ads search term diagnostics", campaign_terms)
+
     levels = ["campaigns", "ad_groups", "ads", "keywords"]
     if terms:
         levels.append("search_terms")

@@ -23,8 +23,8 @@ def test_campaign_selection_scopes_cards_comparison_table_and_charts():
     with patch('frontend.views.st', ui), patch('frontend.views.table') as table:
         dashboard(report, account, '/account/one', date(2026, 11, 14), date(2026, 11, 14))
     assert columns[0].metric.call_args.args[:3] == ('Spend', 'CAD 12.00', '+CAD 4.00')
-    assert table.call_args.args[0][0]['Spend'] == 'CAD 12.00'
-    assert len(table.call_args.args[0]) == 1
+    assert table.call_args_list[0].args[0][0]['Spend'] == 'CAD 12.00'
+    assert len(table.call_args_list[0].args[0]) == 1
     assert ui.plotly_chart.call_count == 10
     assert list(ui.plotly_chart.call_args_list[0].args[0].data[0].y) == [12]
     assert all(call.args[0] <= 3 for call in ui.columns.call_args_list)

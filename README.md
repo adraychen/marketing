@@ -196,3 +196,15 @@ Exports reuse the article-table aggregation and include the Facebook lifetime co
 Reddit Ads is integrated into the paid overview, Paid Advertising, Connections & Sync, and report exports using the stable v3 read-only API. It reuses shared account/campaign/ad metadata and adds nullable daily observations plus encrypted private OAuth storage. See [REDDIT_ADS_SETUP.md](REDDIT_ADS_SETUP.md) for migration, adsread authorization, six-hour cron configuration, metrics, attribution and validation requirements. Live Reddit access is not verified until the account is authorized and synced.
 
 Paid Advertising: Google Ads Dashboard offers an All campaigns / individual campaign selector. Cards, previous-period comparisons, daily charts and the campaign summary follow this selection. Google cards use three columns; paid metric values wrap rather than truncate. Other paid platforms retain their campaign filters. Report exports retain their existing explicit campaign selections and attribution definitions.
+
+### Google Ads campaign budget and search diagnostics
+
+Apply `supabase/migrations/20261120000100_google_search_lost_is.sql` in Supabase **before deploying** the updated backend. Then sync Google Ads for the reporting dates to backfill the two nullable lost-impression-share fields. No advertising settings or budgets are changed.
+
+Paid Advertising campaign performance and report exports include current average daily budget, shared budget identity, reported daily spend range, daily Search lost IS (budget/rank) ranges and coverage counts, plus reported search-term conversion subtotals. Expand the daily diagnostics and search-term sections for individual observations. Report exports include search-term detail when the existing search-terms option is selected.
+
+Lost IS percentages are not additive: the summary shows a daily min–max range, not an estimated selected-period average. The Google sentinel 0.9001 displays as >90%; missing values remain unavailable. Definitions: https://developers.google.com/google-ads/api/reference/rpc/v24/Metrics
+
+Budgets are latest imported settings, not historical observations. Shared budgets cannot be treated as each campaign's allowance. No historical utilization ratio is fabricated. To measure historical budget consumption exactly, dated budget changes and shared-pool spend would be required.
+
+Search terms are Google's disclosed subset. Their conversions use configured Google Ads goals and cannot establish checkout starts. Checkout measurement requires an existing begin_checkout conversion action with action-category reporting (or a verified GA4 mapping); the current collector does not retrieve action-specific search-term conversions. Do not create duplicate conversion events or interpret general conversions as checkouts. No automated relevance judgments are produced.

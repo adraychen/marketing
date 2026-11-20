@@ -60,9 +60,12 @@ def dashboard(report, account, _route, start, end):
             key=f"google-dashboard-campaign:{_route}",
         )
         if selected is not None:
+            allowed = {selected}
+            for level in ("ad_groups", "search_terms"):
+                allowed.update(row["resource"] for row in report.get(level, []) if row.get("parent") in allowed)
             report = {**report, "campaigns": [lookup[selected]],
                       "performance": [row for row in report["performance"]
-                                      if row.get("resource") == selected]}
+                                      if row.get("resource") in allowed]}
         st.caption("Cards and daily charts show the selected campaign, or all campaigns combined.")
     before_start, before_end = previous_period(start, end)
     current = period_rows(report, "campaigns", start, end)
@@ -94,13 +97,15 @@ def dashboard(report, account, _route, start, end):
     st.caption("Conversion rate uses ad interactions. A dash indicates missing data or an undefined ratio.")
     if campaign_items:
         st.subheader("Campaign performance")
-        by_campaign = metric_by_resource(report, "campaigns", start, end, currency)
-        table([{
-            "Campaign": item["data"]["name"],
-            "Campaign ID": item["data"].get("id", item["resource"]),
-            **{label: number(by_campaign.get(item["resource"], {}).get(key), kind, currency)
-               for key, label, kind in METRICS},
-        } for item in report["campaigns"]])
+        from frontend.google_diagnostics import NOTE, tables
+        summary, daily_details, search_terms = tables(report, start, end, currency)
+        table(summary)
+        st.caption(NOTE)
+        with st.expander("Daily spend and lost impression share"):
+            table(daily_details)
+        with st.expander("Search terms and conversions"):
+            table(search_terms)
+
     if not current:
         return
 

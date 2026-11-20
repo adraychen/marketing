@@ -75,7 +75,8 @@ def snapshot(org, account_id, start, end, currency):
             data[table] = cur.fetchall()
         cur.execute("""
             select kind, resource, day, currency, spend::double precision as spend,
-                   impressions, clicks, interactions, conversions, value
+                   impressions, clicks, interactions, conversions, value,
+                   search_budget_lost_impression_share, search_rank_lost_impression_share
             from marketing_performance_daily where organization_id=%s and account_id=%s
             and day between %s and %s and currency=%s order by day
         """, (org, account_id, start, end, currency))
@@ -120,16 +121,20 @@ def write_import(cur, org, account_id, batch, start, end, currency):
     if batch.performance:
         execute_values(cur, """
             insert into import_daily (organization_id,account_id,kind,resource,day,currency,
-                                      spend,impressions,clicks,interactions,conversions,value) values %s
+                                      spend,impressions,clicks,interactions,conversions,value,
+                                      search_budget_lost_impression_share,search_rank_lost_impression_share) values %s
         """, [(org, account_id, row.kind, row.resource, row.day, row.currency, row.spend,
-               row.impressions, row.clicks, row.interactions, row.conversions, row.value)
+               row.impressions, row.clicks, row.interactions, row.conversions, row.value,
+               row.search_budget_lost_impression_share, row.search_rank_lost_impression_share)
               for row in batch.performance])
     cur.execute("""
         insert into marketing_performance_daily
         select * from import_daily where true
         on conflict (organization_id,account_id,kind,resource,day,currency) do update set
             spend=excluded.spend, impressions=excluded.impressions, clicks=excluded.clicks,
-            interactions=excluded.interactions, conversions=excluded.conversions, value=excluded.value
+            interactions=excluded.interactions, conversions=excluded.conversions, value=excluded.value,
+            search_budget_lost_impression_share=excluded.search_budget_lost_impression_share,
+            search_rank_lost_impression_share=excluded.search_rank_lost_impression_share
     """)
     cur.execute("""
         delete from marketing_performance_daily p where organization_id=%s and account_id=%s

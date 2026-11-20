@@ -112,7 +112,9 @@ def daily(row, kind, resource, currency):
                  spend=int(m.get("costMicros", 0)) / 1_000_000,
                  impressions=int(m.get("impressions", 0)), clicks=int(m.get("clicks", 0)),
                  interactions=int(m.get("interactions", 0)), conversions=float(m.get("conversions", 0)),
-                 value=m.get("conversionsValue"))
+                 value=m.get("conversionsValue"),
+                 search_budget_lost_impression_share=m.get("searchBudgetLostImpressionShare"),
+                 search_rank_lost_impression_share=m.get("searchRankLostImpressionShare"))
 
 
 class GoogleAdsConnector(AdvertisingConnector):
@@ -267,7 +269,9 @@ class GoogleAdsConnector(AdvertisingConnector):
                 search_term_view.status, ad_group.resource_name""", "search_term_view", "searchTermView", ""),
         )
         for kind, fields, source, key, extra in sources:
-            query = f"select {fields}, {METRICS} from {source} where {period} {extra}"
+            additional = (", metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share"
+                          if kind == "campaigns" else "")
+            query = f"select {fields}, {METRICS}{additional} from {source} where {period} {extra}"
             for row in self.rows(account, query):
                 item = row[key]
                 resource = item["resourceName"]
