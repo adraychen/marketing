@@ -182,3 +182,15 @@ Paid Meta reporting is implemented as a separate read-only integration from orga
 ## Campaign evaluation
 
 Meta campaign performance and exports include a source-labeled funnel, product-landing ecommerce outcomes, Shopify UTM order attribution, tracking diagnostics, profitability estimates, and evidence-based recommendations. Optional AI interpretation uses the existing Groq integration. Follow [CAMPAIGN_EVALUATION.md](CAMPAIGN_EVALUATION.md) for the additive migration, optional product/cost permissions, detailed-sync flag, formulas, and attribution limitations. Active campaigns and budgets are never modified.
+
+## Dashboard and exported metrics
+
+Paid overview includes Spend, Impressions, Clicks, CTR, Avg. CPC, Conversions and Data status. Conversions mean Google Ads conversions, Meta website purchases, or ChatGPT goal conversions respectively; do not sum them across platforms or treat them as unique Shopify orders. Exports include corresponding platform dashboard-metric tables, with currency and coverage status. Ratios in exports are fractions.
+
+Organic overview separates Shopify Blog from Meta posts and Reels, with separate Facebook and Instagram rows. Instagram remains untracked until content access is connected. Shopify Blog has one Articles table without a campaign filter: Title, Published, Article views, Article landing sessions, Purchases in article landing sessions, Revenue in article landing sessions, Google search clicks, Google search impressions. A date selector controls performance; Campaign links and UTM Link Builder remain separate.
+
+Exports reuse the article-table aggregation and include the Facebook lifetime cohort summary. Export selections still apply: match dates, accounts, campaigns and content to compare with the dashboard. Missing data stays unavailable, and incomplete coverage is not silently filled with zeros. Existing detailed evidence remains in exports. These display/export changes require deployment but no database migration.
+
+## Reddit Ads
+
+Reddit Ads is integrated into the paid overview, Paid Advertising, Connections & Sync, and report exports using the stable v3 read-only API. It reuses shared account/campaign/ad metadata and adds nullable daily observations plus encrypted private OAuth storage. See [REDDIT_ADS_SETUP.md](REDDIT_ADS_SETUP.md) for migration, adsread authorization, six-hour cron configuration, metrics, attribution and validation requirements. Live Reddit access is not verified until the account is authorized and synced.

@@ -45,3 +45,7 @@ References checked November 18, 2026:
 - https://developers.openai.com/ads/api-overview
 - https://developers.openai.com/ads/api-reference/insights
 - https://developers.openai.com/ads/reporting
+
+## Overview and report metrics
+
+Paid overview and exported dashboard metrics include spend, impressions, clicks, calculated CTR, calculated average CPC and goal conversions. Goal conversions are not necessarily purchases and are not added to other platforms' conversions. Spend sums daily ad observations within the selected dates, not billing charges. Sync ends yesterday in the account timezone; a requested range outside imported coverage is partial. Match report campaign selections and dates to the dashboard when reconciling. Missing metrics remain unavailable.

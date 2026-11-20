@@ -489,6 +489,20 @@ def main():
         except AdsError as exc:
             print(f"chatgpt_ads: {exc}", flush=True)
             failed = True
+    if environment("REDDIT_ADS_ORGANIZATION_ID") == org:
+        from backend import reddit_ads
+        from backend.connectors.reddit_ads import RedditError
+        try:
+            counts = reddit_ads.run_sync(org)
+            print(f"reddit_ads: succeeded. {counts}", flush=True)
+        except reddit_ads.SyncBusy:
+            print("reddit_ads: skipped; sync already running", flush=True)
+        except UndefinedTable:
+            print("reddit_ads: apply 20261119000100_reddit_ads.sql", flush=True)
+            failed = True
+        except RedditError as exc:
+            print(f"reddit_ads: {exc}", flush=True)
+            failed = True
     return int(failed)
 
 

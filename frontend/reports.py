@@ -32,6 +32,15 @@ ARCHIVE_SUMMARIES = {"Report scope", "Google Ads coverage", "Google Ads overview
                      "Google Ads budget and bidding"}
 
 
+def paid_dashboard_row(platform, metrics, conversion_key, currency=None):
+    from backend.metrics import ratio
+    return {"Platform": platform, "Currency": currency, "Spend": metrics.get("spend"),
+            "Impressions": metrics.get("impressions"), "Clicks": metrics.get("clicks"),
+            "CTR": ratio(metrics.get("clicks"), metrics.get("impressions")),
+            "Avg. CPC": ratio(metrics.get("spend"), metrics.get("clicks")),
+            "Conversions": metrics.get(conversion_key), "Conversion definition": conversion_key}
+
+
 def cell(value):
     if value is None:
         return ""
@@ -241,6 +250,11 @@ def add_ads(report, account, route, params, start, end, week_end, terms, drafts,
         daily.extend({"period": label, "day": day, **summarize(entries, currency)}
                      for day, entries in sorted(by_day.items()))
     report.table("Google Ads overview", totals)
+    report.table("Google Ads dashboard metrics", [
+        {"Account": account.get("name"), **paid_dashboard_row("Google Ads", row, "conversions", currency),
+         "Period": row["period"], "Start": row["start"], "End": row["end"],
+         "Data status": "Available" if complete else "Partial period"}
+        for row in totals if row["period"] == "Selected"])
     report.table("Google Ads daily trend", daily)
     levels = ["campaigns", "ad_groups", "ads", "keywords"]
     if terms:
@@ -339,6 +353,8 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                     "content cron version and the visibility migration before interpreting these gaps.")
     daily, snapshots, post_links = [], [], []
     article_review, facebook_review = [], []
+    article_dashboard = []
+    meta_dashboard = []
     facebook_snapshots = {}
     post_landing = []
     organic_metrics, organic_diagnostics, organic_outcomes = [], [], []
@@ -350,7 +366,13 @@ def add_content(report, route, catalog, campaign, params, terms=False):
         review = {**context, "published_at": item["published_at"], "url": item["url"]}
         item_daily = details["daily"]
         item_snapshots = details["snapshots"]
+        if item["source"] == "facebook" and str(params["start"]) <= str(item["published_at"])[:10] <= str(params["end"]):
+            latest = max(item_snapshots, key=lambda row: row["observed_at"], default={})
+            meta_dashboard.append({"metrics": latest.get("metrics")})
+
         if item["source"] == "shopify":
+            from frontend.organic_summary import article_row
+            article_dashboard.append(article_row(item, item_daily))
             for report_kind in ("ga4_views", "ga4_landing", "ga4_traffic", "ga4_facebook", "gsc_page", "gsc_query"):
                 if report_kind == "gsc_query" and not terms:
                     continue
@@ -446,6 +468,22 @@ def add_content(report, route, catalog, campaign, params, terms=False):
                 "are the Open Graph tags published by the storefront. Facebook rows describe Page posts. "
                 "Paid Meta ad creative and ad-level performance require a Meta Ads account connection.")
     report.table("Shopify article review", article_review)
+    report.table("Shopify article dashboard metrics", article_dashboard)
+    if any(item["source"] == "facebook" for item in items):
+        from frontend.organic_summary import post_total
+        report.table("Facebook posts and Reels dashboard metrics", [{"Platform": "Facebook",
+            "Content published": len(meta_dashboard),
+            "Media views": post_total(meta_dashboard, ("post_media_view",)),
+            "Interactions": post_total(meta_dashboard, ("reactions", "comments", "shares")),
+            "Post clicks": post_total(meta_dashboard, ("post_clicks",))}])
+        report.note("Meta content summary covers selected posts published in the report's UTC period using each item's latest "
+                    "lifetime observation within the period. It is not period activity or unique reach; paid distribution may be included. "
+                    "Instagram owned-content tracking is untracked; referral traffic is not assigned to posts or Reels.")
+
+    report.note("Article dashboard metrics use the selected report dates and selected articles. Google search clicks and "
+                "Google search impressions come from Search Console; article views and landing-session outcomes come from GA4. "
+                "Views include repeat views and all traffic sources. Revenue includes its currency. A dash means unavailable "
+                "or ambiguous reporting properties; zero means reported zero. Landing-session purchases are not canonical Shopify orders.")
     report.table("Google Search Console article performance", search)
     if terms:
         report.table("Google Search queries by article", queries)

@@ -73,6 +73,10 @@ def add_meta_report(report,base,start,end,campaign_ids,data=None,include_ai=Fals
     if data["stale"]:
         report.note("Meta paid import is over 48 hours old.")
     report.table("Meta paid overview",[totals(data)])
+    from frontend.reports import paid_dashboard_row
+    report.table("Meta Ads dashboard metrics", [{**paid_dashboard_row("Meta Ads", totals(data), "website_purchases",
+        account["data"].get("currency") if account else None),
+        "Data status": "Needs refresh" if data["stale"] else "Available" if data["coverage"] else "Partial period"}])
     report.table("Meta paid campaign performance",campaigns(data))
     report.table("Meta paid campaign settings",data["campaigns"])
     report.table("Meta paid ad set settings and targeting",data["adsets"])

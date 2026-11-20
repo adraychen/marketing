@@ -33,7 +33,7 @@ def google_rows(base, start, end):
 
 
 def show_paid_summary(rows):
-    """A compact delivery comparison; platform-specific outcomes stay in paid reports."""
+    """Compact delivery and platform-attributed conversion summary."""
     cards = []
     for currency in sorted({r["Currency"] for r in rows if r.get("Spend") is not None}):
         spend = sum(r["Spend"] for r in rows if r.get("Currency") == currency and r.get("Spend") is not None)
@@ -49,6 +49,7 @@ def show_paid_summary(rows):
 
     counts = {platform: sum(r["Platform"] == platform for r in rows) for platform in {r["Platform"] for r in rows}}
     statuses = {"Imported": "Available", "Partial coverage": "Partial period", "Stale import": "Needs refresh",
+                "Definition conflict": "Attribution/currency conflict",
                 "No account connected": "Not connected", "Not connected": "Not connected",
                 "No successful paid import yet": "Not synced", "No successful import yet": "Not synced",
                 "Report on demand": "Load in Paid Advertising"}
@@ -58,18 +59,24 @@ def show_paid_summary(rows):
         if counts[label] > 1:
             label += " · " + (row.get("Account") or "Unknown account")
         currency = row.get("Currency", "")
+        conversion_key = {"Google Ads": "Google Ads conversions", "Meta Ads": "Meta website purchases",
+                          "ChatGPT Ads": "ChatGPT goal conversions", "Reddit Ads": "Reddit purchases"}.get(row["Platform"])
+        conversions = row.get(conversion_key)
         summary.append({"Platform": label,
                         "Spend": number(row.get("Spend"), "money", currency),
                         "Impressions": f"{row['Impressions']:,.0f}" if row.get("Impressions") is not None else "—",
                         "Clicks": f"{row['Clicks']:,.0f}" if row.get("Clicks") is not None else "—",
                         "CTR": number(ratio(row.get("Clicks"), row.get("Impressions")), "percent", currency),
                         "Avg. CPC": number(ratio(row.get("Spend"), row.get("Clicks")), "money", currency),
+                        "Conversions": f"{conversions:,.2f}".rstrip("0").rstrip(".") if conversions is not None else "—",
                         "Data status": statuses.get(row.get("Status"), "Unavailable")})
     table(summary)
     st.caption("Reported totals include available data only. — means unavailable or an undefined ratio; 0 means reported zero. "
                "CTR and average CPC are calculated from reported clicks, impressions and spend. Meta clicks include all ad clicks.")
     st.caption("Open Paid Advertising for campaign results, daily charts, conversions, revenue and ROAS. "
                "Each platform uses its own conversion definitions and reporting time zone.")
+    st.caption("Conversions: Google Ads reported conversions; Meta website purchases; ChatGPT goal conversions (not necessarily purchases); Reddit attributed purchases. "
+               "These are platform-attributed results, not unique Shopify orders, and must not be added across platforms.")
     if any(row.get("Status") != "Imported" for row in rows):
         with st.expander("Data availability"):
             table([{"Platform": row["Platform"], "Account": row.get("Account"), "Status": row.get("Status")}
@@ -136,6 +143,12 @@ def show_marketing_overview(base, mode, *, paid_only=False):
             rows.append({"Platform": "ChatGPT Ads", "Status": "No successful import yet"})
     except APIError:
         rows.append({"Platform": "ChatGPT Ads", "Status": "Not connected or migration needed"})
+    try:
+        from frontend.reddit_ads import load as load_reddit, summary_rows as reddit_summary
+        reddit = reddit_summary(load_reddit(base, start, end))
+        rows.extend(reddit or [{"Platform": "Reddit Ads", "Status": "Not connected"}])
+    except APIError:
+        rows.append({"Platform": "Reddit Ads", "Status": "Not connected or migration needed"})
     show_paid_summary(rows)
     if paid_only:
         return

@@ -16,6 +16,9 @@ from backend.connectors import tiktok
 from backend.connectors.meta_ads import MetaAdsError
 from backend.connectors.google_ads import GoogleAdsError
 from backend import chatgpt_ads
+from backend import reddit_ads
+from backend.reddit_auth import configuration as reddit_configuration
+from backend.connectors.reddit_ads import RedditError
 from backend.connectors.chatgpt_ads import AdsError as ChatGPTAdsError, configuration as chatgpt_configuration
 from backend.jobs import SyncBusy, configured_org, connector, run_sync
 from backend.metrics import previous_period
@@ -162,6 +165,43 @@ def delete_facebook_observation(org: str, observation_id: UUID, _editor=Depends(
     if not facebook_analytics.delete_manual(org, str(observation_id)):
         raise HTTPException(404, "Manual observation unavailable.")
     return {"deleted": True}
+
+
+@app.get("/orgs/{org}/reddit-ads/status")
+def reddit_ads_status(org: str, _member=Depends(member)):
+    empty = {"configured": bool(reddit_configuration(org)), "authorized": False, "schema_ready": False, "accounts": [], "runs": []}
+    if MODE != "live":
+        return {**empty, "configured": False}
+    try:
+        return reddit_ads.status(org)
+    except UndefinedTable:
+        return empty
+
+
+@app.get("/orgs/{org}/reddit-ads/report")
+def reddit_ads_report(org: str, start: date, end: date, _member=Depends(member)):
+    if start > end or (end-start).days > 730:
+        raise HTTPException(422, "Choose a date range of up to 731 days.")
+    if MODE != "live":
+        return {"accounts": [], "policy": reddit_ads.POLICY, "start": str(start), "end": str(end)}
+    try:
+        return reddit_ads.report(org, start, end)
+    except UndefinedTable:
+        raise HTTPException(503, "Apply 20261119000100_reddit_ads.sql before syncing Reddit Ads.") from None
+
+
+@app.post("/orgs/{org}/reddit-ads/sync")
+def reddit_ads_sync(org: str, membership=Depends(member)):
+    if MODE != "live" or membership["role"] != "admin":
+        raise HTTPException(403, "An organization admin must synchronize Reddit Ads.")
+    try:
+        return reddit_ads.run_sync(org)
+    except reddit_ads.SyncBusy:
+        raise HTTPException(409, "A Reddit Ads sync is already running.") from None
+    except UndefinedTable:
+        raise HTTPException(503, "Apply 20261119000100_reddit_ads.sql before syncing Reddit Ads.") from None
+    except RedditError as exc:
+        raise HTTPException(502, str(exc)) from None
 
 
 @app.get("/orgs/{org}/chatgpt-ads/status")

@@ -34,7 +34,7 @@ def accounts(org):
     with database() as cur:
         cur.execute("""
             select id, data, synced_from, synced_through from marketing_ad_accounts
-            where organization_id=%s order by data->>'name'
+            where organization_id=%s and coalesce(data->>'platform','Google Ads')='Google Ads' order by data->>'name'
         """, (org,))
         return [{**row["data"], "id": row["id"], "synced_from": row["synced_from"],
                  "synced_through": row["synced_through"]} for row in cur.fetchall()]

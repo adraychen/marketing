@@ -88,7 +88,7 @@ def app():
         show_content_marketing(base, "facebook" if source == "Facebook" else "shopify")
         return
     if nav == "Paid Advertising":
-        platforms = ["All Paid", "Google Ads", "Meta Ads", "ChatGPT Ads"]
+        platforms = ["All Paid", "Google Ads", "Meta Ads", "ChatGPT Ads", "Reddit Ads"]
         if mode == "live":
             try:
                 if call(f"{base}/tiktok-ads/status")["configured"]:
@@ -101,6 +101,10 @@ def app():
             return
         if platform == "Meta Ads":
             show_meta_ads(base, mode)
+            return
+        if platform == "Reddit Ads":
+            from frontend.reddit_ads import show
+            show(base)
             return
         if platform == "ChatGPT Ads":
             from frontend.chatgpt_ads import show

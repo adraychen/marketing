@@ -12,7 +12,7 @@ from frontend.reports import Report, add_ads, add_content, add_facebook_analytic
 from frontend.tiktok_ads import TIKTOK_NOTE, campaign_totals
 
 SOURCES = ('Google Ads', 'Facebook Organic', 'Facebook Paid Ads', 'Shopify Blog',
-           'Shopify Store Results', 'TikTok Ads', 'ChatGPT Ads')
+           'Shopify Store Results', 'TikTok Ads', 'ChatGPT Ads', 'Reddit Ads')
 SYNC_TABLES = {'Google Ads sync history', 'Content source status', 'Commerce latest sync results',
                'Facebook Data Availability and API Limitations'}
 
@@ -129,6 +129,12 @@ def generate_period(report, base, catalog, accounts, selected, choices, params, 
             add_report(report, load(base, start, end), choices['chatgpt'])
         except APIError as exc:
             report.note('ChatGPT Ads unavailable: ' + str(exc))
+    if 'Reddit Ads' in selected and choices.get('reddit'):
+        from frontend.reddit_ads import load as reddit_load, add_report as add_reddit
+        try:
+            add_reddit(report, reddit_load(base, start, end), choices['reddit'])
+        except APIError as exc:
+            report.note('Reddit Ads unavailable: ' + str(exc))
     trim_optional(report, sync_details)
 
 
@@ -189,8 +195,13 @@ def show_report_builder(org, base, mode):
     except APIError:
         chatgpt_state = {'configured': False, 'accounts': []}
     statuses['ChatGPT Ads'] = 'Imported data available' if chatgpt_state['accounts'] else 'Configured; sync needed' if chatgpt_state['configured'] else 'Not connected'
+    try:
+        reddit_state = call(f'{base}/reddit-ads/status')
+    except APIError:
+        reddit_state = {'configured': False, 'accounts': []}
+    statuses['Reddit Ads'] = 'Imported data available' if reddit_state['accounts'] else 'Authorization or sync needed' if reddit_state['configured'] else 'Not connected'
     st.subheader('2. Sources to include')
-    selected = [source for source in SOURCES if st.checkbox(source, value=source != 'TikTok Ads' and (source != 'Facebook Paid Ads' or bool(meta_status['accounts'])) and (source != 'ChatGPT Ads' or bool(chatgpt_state['accounts'])),
+    selected = [source for source in SOURCES if st.checkbox(source, value=(source != 'Reddit Ads' or bool(reddit_state['accounts'])) and source != 'TikTok Ads' and (source != 'Facebook Paid Ads' or bool(meta_status['accounts'])) and (source != 'ChatGPT Ads' or bool(chatgpt_state['accounts'])),
                  key=f'{prefix}:source:{source}', help=statuses[source])]
     st.caption('Connection status is separate from selection. Unavailable selected sources will be flagged, never reported as zero.')
     st.dataframe([{'Source': s, 'Status': statuses[s]} for s in SOURCES], hide_index=True)
@@ -198,6 +209,16 @@ def show_report_builder(org, base, mode):
     st.caption('All available items start selected. Only checked items from checked sources appear in the report.')
     choices = {}
     for source in selected:
+        if source == 'Reddit Ads':
+            from frontend.reddit_ads import load as reddit_load, campaign_options
+            try:
+                reddit = reddit_load(base, start, end)
+                choices['reddit'] = item_checks(source, campaign_options(reddit), f'{prefix}:reddit')
+                if not choices['reddit']:
+                    warnings.append('Reddit Ads has no selected imported campaigns.')
+            except APIError as exc:
+                warnings.append('Reddit Ads unavailable: ' + str(exc))
+            continue
         if source == 'ChatGPT Ads':
             from frontend.chatgpt_ads import load
             try:

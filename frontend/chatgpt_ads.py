@@ -54,6 +54,11 @@ def add_report(report, data, campaign_ids=None):
         "synced_at": data.get("synced_at"), "complete": data["coverage"], "stale": data["stale"],
         "attribution": data["attribution"], "state": "available" if rows else "unavailable"}])
     report.table("ChatGPT Ads overview", [totals(rows)])
+    from frontend.reports import paid_dashboard_row
+    report.table("ChatGPT Ads dashboard metrics", [{**paid_dashboard_row("ChatGPT Ads", totals(rows), "conversions",
+        (data.get("account") or {}).get("currency_code")),
+        "Conversion definition": "ChatGPT goal conversions (not necessarily purchases)",
+        "Data status": "Needs refresh" if data["stale"] else "Available" if data["coverage"] else "Partial period"}])
     report.table("ChatGPT Ads campaign performance", [{"campaign_id": key, **totals([r for r in rows if r["campaign_id"] == key])}
                                                      for key in sorted({r["campaign_id"] for r in rows})])
     report.table("ChatGPT Ads daily ad performance", rows)

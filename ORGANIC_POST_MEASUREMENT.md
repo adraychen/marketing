@@ -24,3 +24,9 @@ References:
 - https://developers.facebook.com/docs/graph-api/reference/insights/
 - https://developers.google.com/analytics/devguides/reporting/data/v1/api-schema
 - https://help.shopify.com/en/manual/promoting-marketing/create-marketing/forms-app/manage
+
+## Overview and article export parity
+
+Shopify Blog uses a combined article/performance table, with no campaign filter. Google search clicks and Google search impressions are Search Console measurements. Article views are GA4 page views from all sources, including repeat views. Article landing sessions begin on the article; their purchases and currency-labeled revenue are GA4 session outcomes, not canonical Shopify orders. Exports reuse this table's aggregation for selected articles and report dates. Multiple reporting properties or missing metric values produce unavailable values rather than combined or zero totals.
+
+Meta overview summarizes latest lifetime observations within the report period for content published in that UTC period. Views and post clicks are additive content counts; interactions require reactions, comments and shares for every included item. Unique reach is not summed. Exports preserve this cohort definition. Instagram is untracked, not zero, and referrals are not evidence of owned-content attribution.
