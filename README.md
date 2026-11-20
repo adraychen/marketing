@@ -194,3 +194,5 @@ Exports reuse the article-table aggregation and include the Facebook lifetime co
 ## Reddit Ads
 
 Reddit Ads is integrated into the paid overview, Paid Advertising, Connections & Sync, and report exports using the stable v3 read-only API. It reuses shared account/campaign/ad metadata and adds nullable daily observations plus encrypted private OAuth storage. See [REDDIT_ADS_SETUP.md](REDDIT_ADS_SETUP.md) for migration, adsread authorization, six-hour cron configuration, metrics, attribution and validation requirements. Live Reddit access is not verified until the account is authorized and synced.
+
+Paid Advertising: Google Ads Dashboard offers an All campaigns / individual campaign selector. Cards, previous-period comparisons, daily charts and the campaign summary follow this selection. Google cards use three columns; paid metric values wrap rather than truncate. Other paid platforms retain their campaign filters. Report exports retain their existing explicit campaign selections and attribution definitions.

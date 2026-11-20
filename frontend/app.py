@@ -88,6 +88,14 @@ def app():
         show_content_marketing(base, "facebook" if source == "Facebook" else "shopify")
         return
     if nav == "Paid Advertising":
+        st.markdown("""<style>
+        [data-testid="stMetricValue"], [data-testid="stMetricValue"] > div,
+        [data-testid="stMetricDelta"] > div {
+            white-space: normal; overflow: visible; text-overflow: clip;
+            overflow-wrap: anywhere;
+        }
+        [data-testid="stMetricValue"] {font-size: clamp(1.2rem, 2vw, 1.8rem);}
+        </style>""", unsafe_allow_html=True)
         platforms = ["All Paid", "Google Ads", "Meta Ads", "ChatGPT Ads", "Reddit Ads"]
         if mode == "live":
             try:

@@ -50,6 +50,20 @@ def dashboard(report, account, _route, start, end):
     st.title("Performance overview")
     st.caption("Google Ads performance · Conversion value and ROAS use Google attribution.")
     currency = account["currency"]
+    campaign_items = report.get("campaigns", [])
+    if campaign_items:
+        lookup = {item["resource"]: item for item in campaign_items}
+        selected = st.selectbox(
+            "Campaign performance", [None, *lookup],
+            format_func=lambda key: "All campaigns" if key is None else
+                f"{lookup[key]['data']['name']} · {lookup[key]['data'].get('id', key)}",
+            key=f"google-dashboard-campaign:{_route}",
+        )
+        if selected is not None:
+            report = {**report, "campaigns": [lookup[selected]],
+                      "performance": [row for row in report["performance"]
+                                      if row.get("resource") == selected]}
+        st.caption("Cards and daily charts show the selected campaign, or all campaigns combined.")
     before_start, before_end = previous_period(start, end)
     current = period_rows(report, "campaigns", start, end)
     prior = period_rows(report, "campaigns", before_start, before_end)
@@ -65,8 +79,8 @@ def dashboard(report, account, _route, start, end):
     if compare:
         st.caption(f"Comparing {start:%b %d, %Y} – {end:%b %d, %Y} with "
                    f"{before_start:%b %d, %Y} – {before_end:%b %d, %Y}.")
-    for offset in (0, 5):
-        for column, (key, label, kind) in zip(st.columns(5), METRICS[offset:offset + 5]):
+    for offset in range(0, len(METRICS), 3):
+        for column, (key, label, kind) in zip(st.columns(3), METRICS[offset:offset + 3]):
             value, old = totals[key], previous[key]
             change = number(value - old, kind, currency) if compare and value is not None and old is not None else None
             if change and kind == "percent":
@@ -78,6 +92,15 @@ def dashboard(report, account, _route, start, end):
             column.metric(label, number(value, kind, currency), change, border=True,
                           delta_color="inverse" if key in {"cpa", "cpc"} else "normal")
     st.caption("Conversion rate uses ad interactions. A dash indicates missing data or an undefined ratio.")
+    if campaign_items:
+        st.subheader("Campaign performance")
+        by_campaign = metric_by_resource(report, "campaigns", start, end, currency)
+        table([{
+            "Campaign": item["data"]["name"],
+            "Campaign ID": item["data"].get("id", item["resource"]),
+            **{label: number(by_campaign.get(item["resource"], {}).get(key), kind, currency)
+               for key, label, kind in METRICS},
+        } for item in report["campaigns"]])
     if not current:
         return
 
