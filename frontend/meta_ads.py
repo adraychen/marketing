@@ -15,6 +15,15 @@ def load_report(base,start,end):
     return call(f"{base}/meta-ads/report",params={"start":str(start),"end":str(end)})
 
 
+def campaign_option_label(row):
+    return f"{row.get('name') or row['id']} · {row.get('effective_status') or row.get('status') or 'Unknown status'} · {row['id']}"
+
+
+def active_campaigns(data):
+    return [row for row in data['campaigns']
+            if (row.get('effective_status') or row.get('status')) == 'ACTIVE']
+
+
 def scoped(data, campaign_ids):
     ids = set(campaign_ids)
     daily = [row for row in data["daily"] if row["campaign_id"] in ids]
@@ -141,9 +150,15 @@ def show_meta_ads(base,mode):
         st.info("Choose a valid period of up to 366 days.")
         return
     data=load_report(base,start,end)
-    selected=st.multiselect("Meta campaigns",[row["id"] for row in data["campaigns"]],
-                            default=[row["id"] for row in data["campaigns"]],
-                            format_func=lambda identifier:next((row.get("name") or identifier for row in data["campaigns"] if row["id"]==identifier),identifier))
+    available = active_campaigns(data)
+    if not available:
+        st.info("No active Meta campaigns were found in the latest import. Sync Meta Paid Ads to refresh campaign status.")
+        return
+    st.caption("Showing active campaigns only, based on the latest sync.")
+    selected=st.multiselect("Meta campaigns",[row["id"] for row in available],
+                            default=[row["id"] for row in available],
+                            key=f"meta-active-campaigns:{base}",
+                            format_func=lambda identifier:next((campaign_option_label(row) for row in available if row["id"]==identifier),identifier))
     data=scoped(data,selected)
     prior_start,prior_end=previous_period(start,end)
     previous=scoped(load_report(base,prior_start,prior_end),selected)

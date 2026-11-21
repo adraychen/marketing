@@ -86,7 +86,7 @@ def show_daily_charts(data, start, end, currency):
         st.info('No ads are available for the selected campaigns.')
         return
     selected = st.multiselect('Ads to chart', list(labels), default=list(labels)[:5],
-                              format_func=labels.get, key='meta-daily-chart-ads')
+                              format_func=labels.get, key='meta-daily-chart-ads:' + ':'.join(sorted(labels)))
     metrics = list(METRICS)
     account = data.get('account') or {}
     st.caption(f"Stored Meta data · Last sync: {account.get('synced_at', 'Unavailable')} · "
