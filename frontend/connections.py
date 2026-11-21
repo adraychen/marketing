@@ -90,12 +90,32 @@ def run_selected(base, selected, targets):
     return results
 
 
+def platform_selector(base):
+    keys = {platform: f'sync-choice:{base}:{platform}' for platform in PLATFORMS}
+    all_key = f'sync-choice-all:{base}'
+    previous = st.session_state.get(f'selected-sync:{base}', PLATFORMS)
+    for platform, key in keys.items():
+        if key not in st.session_state:
+            st.session_state[key] = platform in previous
+    st.session_state[all_key] = all(st.session_state[key] for key in keys.values())
+
+    def toggle_all():
+        for key in keys.values():
+            st.session_state[key] = st.session_state[all_key]
+
+    st.write('Platforms to sync')
+    st.checkbox('All', key=all_key, on_change=toggle_all)
+    columns = st.columns(3)
+    for index, (platform, key) in enumerate(keys.items()):
+        columns[index % 3].checkbox(platform, key=key)
+    return [platform for platform, key in keys.items() if st.session_state[key]]
+
+
 def show(mode, org, base):
     st.title('Connections & Sync')
     st.caption(f"{org['name']} · {pretty(org['role'])}")
     rows, targets = fetch(base)
-    all_platforms = st.checkbox('Select all platforms', value=True, key=f'all-sync:{base}')
-    selected = PLATFORMS if all_platforms else st.multiselect('Platforms to sync', PLATFORMS, key=f'selected-sync:{base}')
+    selected = platform_selector(base)
     st.caption('Meta Organic Ads collects Facebook organic posts and Page insights; it does not include paid ads or an Instagram connection. Google Ads sync includes all connected Google accounts.')
     if st.button('Sync selected platforms', type='primary', disabled=mode != 'live' or org['role'] != 'admin' or not selected):
         with st.spinner('Syncing selected platforms… Results will appear below.'):

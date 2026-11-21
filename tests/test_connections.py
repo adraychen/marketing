@@ -56,3 +56,31 @@ def test_selected_content_job_does_not_sync_other_platforms():
     assert discover.call_args.args[2] == 'facebook'
     commerce.assert_not_called()
     reports.assert_not_called()
+
+
+def test_platform_checkboxes_support_all_individual_multiple_and_none():
+    from frontend.connections import platform_selector, PLATFORMS
+    ui = MagicMock()
+    ui.session_state = {}
+    ui.columns.return_value = [MagicMock() for _ in range(3)]
+    base = '/orgs/a'
+    all_key = f'sync-choice-all:{base}'
+    with patch('frontend.connections.st', ui):
+        assert platform_selector(base) == PLATFORMS
+        toggle = ui.checkbox.call_args.kwargs['on_change']
+        ui.session_state[all_key] = False
+        toggle()
+        assert platform_selector(base) == []
+        ui.session_state[f'sync-choice:{base}:Shopify'] = True
+        assert platform_selector(base) == ['Shopify']
+        assert not ui.session_state[all_key]
+        ui.session_state[f'sync-choice:{base}:Google Ads'] = True
+        assert platform_selector(base) == ['Google Ads', 'Shopify']
+        ui.session_state[all_key] = True
+        toggle()
+        assert platform_selector(base) == PLATFORMS
+        ui.session_state[f'sync-choice:{base}:Shopify'] = False
+        assert 'Shopify' not in platform_selector(base)
+        assert not ui.session_state[all_key]
+    ui.multiselect.assert_not_called()
+    assert sum(c.checkbox.call_count for c in ui.columns.return_value) == 6 * len(PLATFORMS)

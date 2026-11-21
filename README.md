@@ -213,7 +213,7 @@ Google Ads campaign summary, daily diagnostics and search-term tables provide an
 
 ### Unified Connections & Sync
 
-Select one or multiple platforms, or Select all platforms, and run Sync selected platforms. Google Ads includes all connected Google accounts. Meta Organic Ads is the display name for the existing Facebook Page/post collectors; it does not imply Instagram access. Shopify includes its existing GA4, Search Console and commerce collectors. TikTok remains on-demand reporting only and is explicitly skipped by batch sync.
+Use the always-visible platform checkboxes to select one or multiple platforms, or check All, then run Sync selected platforms. Unchecking All clears the selection; unchecking an individual platform clears All while retaining the other selections. Google Ads includes all connected Google accounts. Meta Organic Ads is the display name for the existing Facebook Page/post collectors; it does not imply Instagram access. Shopify includes its existing GA4, Search Console and commerce collectors. TikTok remains on-demand reporting only and is explicitly skipped by batch sync.
 
 The all-platform table includes scheduled and manual source results, counts where stored, timestamps and warnings/errors, plus CSV download. Unknown counts are not zero. Last-success timestamps for paid sources are limited to the history returned by their existing status endpoint. Google account discovery remains under Manage connections for adding accounts; reconnecting existing accounts is unnecessary.
 
