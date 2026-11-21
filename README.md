@@ -208,3 +208,13 @@ Lost IS percentages are not additive: the summary shows a daily min–max range,
 Budgets are latest imported settings, not historical observations. Shared budgets cannot be treated as each campaign's allowance. No historical utilization ratio is fabricated. To measure historical budget consumption exactly, dated budget changes and shared-pool spend would be required.
 
 Search terms are Google's disclosed subset. Their conversions use configured Google Ads goals and cannot establish checkout starts. Checkout measurement requires an existing begin_checkout conversion action with action-category reporting (or a verified GA4 mapping); the current collector does not retrieve action-specific search-term conversions. Do not create duplicate conversion events or interpret general conversions as checkouts. No automated relevance judgments are produced.
+
+Google Ads campaign summary, daily diagnostics and search-term tables provide an explicit Download table as CSV button. Files use the selected campaign/date scope, date-stamped filenames and UTF-8 with BOM for Excel. Downloads do not trigger a Streamlit rerun.
+
+### Unified Connections & Sync
+
+Select one or multiple platforms, or Select all platforms, and run Sync selected platforms. Google Ads includes all connected Google accounts. Meta Organic Ads is the display name for the existing Facebook Page/post collectors; it does not imply Instagram access. Shopify includes its existing GA4, Search Console and commerce collectors. TikTok remains on-demand reporting only and is explicitly skipped by batch sync.
+
+The all-platform table includes scheduled and manual source results, counts where stored, timestamps and warnings/errors, plus CSV download. Unknown counts are not zero. Last-success timestamps for paid sources are limited to the history returned by their existing status endpoint. Google account discovery remains under Manage connections for adding accounts; reconnecting existing accounts is unnecessary.
+
+Deploy both backend and frontend. No new migration is required for this page. On-demand Meta Organic Ads/Shopify imports require the same CONTENT_* configuration, credentials and existing feature flags on the **API service** as on the content cron service. Credentials stay server-side. `/orgs/{org}/content/sync?source=facebook|shopify` requires an organization admin and an exact configured CONTENT_ORGANIZATION_ID match; it shares the scheduled collector's advisory lock. The normal cron command continues to collect all its configured sources. One platform's request failure does not prevent the other selected platforms from being attempted.

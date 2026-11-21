@@ -99,12 +99,12 @@ def dashboard(report, account, _route, start, end):
         st.subheader("Campaign performance")
         from frontend.google_diagnostics import NOTE, tables
         summary, daily_details, search_terms = tables(report, start, end, currency)
-        table(summary)
+        table(summary, download_name=f"google-campaign-performance_{start}_{end}.csv")
         st.caption(NOTE)
         with st.expander("Daily spend and lost impression share"):
-            table(daily_details)
+            table(daily_details, download_name=f"google-campaign-daily_{start}_{end}.csv")
         with st.expander("Search terms and conversions"):
-            table(search_terms)
+            table(search_terms, download_name=f"google-search-terms_{start}_{end}.csv")
 
     if not current:
         return
@@ -153,11 +153,18 @@ def pretty(value):
     return str(value or "—").replace("_", " ").title()
 
 
-def table(rows):
+def table(rows, download_name=None):
     if not rows:
         st.info("No rows match this view.")
         return
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    frame = pd.DataFrame(rows)
+    st.dataframe(frame, hide_index=True, width="stretch")
+    if download_name:
+        st.download_button(
+            "Download table as CSV", data=frame.to_csv(index=False).encode("utf-8-sig"),
+            file_name=download_name, mime="text/csv", on_click="ignore",
+            key=f"table-download:{download_name}",
+        )
 
 
 def metric_by_resource(report, kind, start, end, currency):
@@ -472,95 +479,5 @@ def content_sync(base, platform):
 
 
 def settings(mode, org, base):
-    st.title("Connections & Sync")
-    st.caption(f"{org['name']} · {pretty(org['role'])}")
-    platform = st.radio("Platform", ("Google Ads", "Facebook", "Meta Paid Ads", "Shopify", "TikTok Ads", "ChatGPT Ads", "Reddit Ads"),
-                        horizontal=True, key=f"sync-platform:{base}")
-    if platform == "Reddit Ads":
-        from frontend.reddit_ads import sync_panel
-        sync_panel(base, mode, org["role"])
-        return
-    if platform == "ChatGPT Ads":
-        from frontend.chatgpt_ads import sync_panel
-        sync_panel(base, mode, org["role"])
-        return
-    if platform == "Meta Paid Ads":
-        from frontend.meta_ads import sync_panel
-        sync_panel(base,mode,org["role"])
-        return
-    if platform in CONTENT_SYNC_SOURCES:
-        content_sync(base, platform)
-        return
-    if platform == "TikTok Ads":
-        status = call(f"{base}/tiktok-ads/status")
-        if status["configured"]:
-            advertiser = status.get("advertiser_id")
-            st.write(f"Configured advertiser · {advertiser}" if advertiser else "TikTok Ads is configured.")
-            st.info("TikTok data is fetched on demand. Open Campaigns → TikTok Ads and select Load TikTok report.")
-            saved = st.session_state.get(f"tiktok-report:{base}")
-            if saved:
-                dates, rows = saved
-                st.caption(f"Last report in this session · {dates[0]} to {dates[1]} · "
-                           f"{len(rows):,} daily campaign records.")
-            st.caption("Available data includes spend, impressions, clicks, and conversions by campaign and day.")
-        else:
-            st.info("TikTok Ads is not connected. An admin can configure an authorized advertiser on the backend.")
-        return
-
-    account = select_ad_account(org["id"], base)
-    if mode == "demo":
-        st.info("Demo accounts use synthetic data. Live synchronization is available in live mode.")
-        return
-    if account:
-        st.caption(f"{account['currency']} · {account['timezone']} · Scheduled or on-demand import")
-        route = f"{base}/accounts/{account['id']}"
-        if org["role"] == "admin" and st.button("Sync Google Ads data", type="primary"):
-            try:
-                with st.spinner("Importing Google Ads data…"):
-                    call(f"{route}/sync", "POST", timeout=600)
-            except APIError as exc:
-                st.error(str(exc))
-            else:
-                st.session_state.flash = "Google Ads synchronization completed."
-                st.rerun()
-
-        history = call(f"{route}/sync")
-        st.subheader("Latest sync")
-        if history:
-            latest = history[0]
-            st.caption(f"{pretty(latest['status'])} · {latest.get('finished_at') or latest['created_at']}")
-            if latest["error"]:
-                st.error(latest["error"])
-            if latest["counts"]:
-                table([{"Data": pretty(key), "Result": sync_result(latest["status"], value), "Records": value}
-                       for key, value in latest["counts"].items()])
-            else:
-                st.info("Record counts are unavailable for this run.")
-            if len(history) > 1:
-                with st.expander("Earlier runs"):
-                    rows = []
-                    for run in history[1:]:
-                        counts = ", ".join(f"{pretty(key)}: {value:,}" for key, value in (run["counts"] or {}).items())
-                        rows.append({"Started": run["created_at"], "Result": pretty(run["status"]),
-                                     "Records by type": counts or None, "Details": run["error"]})
-                    table(rows)
-        else:
-            st.info("No sync runs recorded for this account.")
-    else:
-        st.info("Connect a Google Ads account to import data.")
-
-    if org["role"] == "admin":
-        with st.expander("Connect a Google Ads account", expanded=account is None):
-            if st.button("Discover accessible accounts"):
-                st.session_state[f"discovery:{base}"] = call(f"{base}/discovery", timeout=90)
-            options = st.session_state.get(f"discovery:{base}")
-            if options:
-                mapping = {item["resource"]: item for item in options}
-                picked = st.selectbox("Available Google Ads account", list(mapping), format_func=lambda key:
-                                      f"{mapping[key]['name']} · {key.split('/')[-1]} · {mapping[key]['currency']}")
-                if st.button("Connect account"):
-                    call(f"{base}/accounts", "POST", params={"resource": picked}, timeout=90)
-                    st.session_state.flash = "Google Ads account connected. Run a sync to import its data."
-                    st.rerun()
-            elif options is not None:
-                st.info("The configured service account returned no eligible Google Ads accounts.")
+    from frontend.connections import show
+    show(mode, org, base)

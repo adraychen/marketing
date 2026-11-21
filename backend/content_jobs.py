@@ -373,12 +373,13 @@ def commerce_sync(client, org, shop, token, client_id, client_secret, days):
     return failed
 
 
-def main():
+def main(argv=None, platforms=None):
     parser = argparse.ArgumentParser(description="Discover and refresh content marketing data.")
     parser.add_argument("--backfill", action="store_true", help="Refresh the entire configured lookback window.")
     parser.add_argument("--diagnose", action="store_true", help="Probe configured content sources without writing data.")
     parser.add_argument("--diagnose-meta", action="store_true", help="Probe all paid Meta request field sets, read-only, without a database connection.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    selected = set(platforms or ("shopify", "facebook", "meta", "chatgpt", "reddit"))
     try:
         org = str(UUID(environment("CONTENT_ORGANIZATION_ID")))
         days = int(environment("CONTENT_BACKFILL_DAYS", "90"))
@@ -435,21 +436,26 @@ def main():
         lock.execute("select pg_try_advisory_xact_lock(hashtextextended(%s, 0)) as acquired", (f"content:{org}",))
         if not lock.fetchone()["acquired"]:
             print("A content sync is already running.")
-            return 0
+            return 2 if platforms else 0
         def fetch_articles(c, account, credential):
             token = shop_token or shopify_token(c, account, shop_client_id, credential)
             return shopify_articles(c, account, token, storefront, blog)
 
-        failed = discovery(client, org, "shopify", shop,
-                           shop_token or (shop_client_secret if shop_client_id else ""), fetch_articles)
-        failed |= discovery(client, org, "facebook", page, meta_token,
-                            lambda c, account, token: facebook_posts(c, account, token, version))
+        failed = False
+        if "shopify" in selected:
+            failed |= discovery(client, org, "shopify", shop,
+                                shop_token or (shop_client_secret if shop_client_id else ""), fetch_articles)
+        if "facebook" in selected:
+            failed |= discovery(client, org, "facebook", page, meta_token,
+                                lambda c, account, token: facebook_posts(c, account, token, version))
         with database() as cur:
             repo.associate(cur, org, shop, page)
-        failed |= report_items(client, org, "ga4", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
-        failed |= report_items(client, org, "ga4_traffic", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
-        failed |= organic_destinations(client, org, page, environment("CONTENT_GA4_PROPERTY_ID"), storefront, days)
-        if re.fullmatch(r"[0-9]+", environment("CONTENT_GA4_PROPERTY_ID")):
+        if "shopify" in selected:
+            failed |= report_items(client, org, "ga4", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
+            failed |= report_items(client, org, "ga4_traffic", environment("CONTENT_GA4_PROPERTY_ID"), shop, days, args.backfill)
+        if "facebook" in selected:
+            failed |= organic_destinations(client, org, page, environment("CONTENT_GA4_PROPERTY_ID"), storefront, days)
+        if "shopify" in selected and re.fullmatch(r"[0-9]+", environment("CONTENT_GA4_PROPERTY_ID")):
             from backend.channel_data import sync as sync_channels
             try:
                 count = sync_channels(client, org, environment("CONTENT_GA4_PROPERTY_ID"),
@@ -457,12 +463,15 @@ def main():
                 finish(org, "ga4_channels", "succeeded", count)
             except SOURCE_ERRORS as exc:
                 failed |= finish(org, "ga4_channels", "failed", message=message(exc))
-        article_indexing(client, org, environment("CONTENT_GSC_SITE"), shop)
-        failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
-        failed |= post_insights(client, org, page, meta_token, version)
-        failed |= page_insights(client, org, page, meta_token, version, days if args.backfill else 28)
-        failed |= commerce_sync(client, org, shop, shop_token, shop_client_id, shop_client_secret, days)
-    if environment("META_ADS_ORGANIZATION_ID") == org:
+        if "shopify" in selected:
+            article_indexing(client, org, environment("CONTENT_GSC_SITE"), shop)
+            failed |= report_items(client, org, "search_console", environment("CONTENT_GSC_SITE"), shop, days, args.backfill)
+        if "facebook" in selected:
+            failed |= post_insights(client, org, page, meta_token, version)
+            failed |= page_insights(client, org, page, meta_token, version, days if args.backfill else 28)
+        if "shopify" in selected:
+            failed |= commerce_sync(client, org, shop, shop_token, shop_client_id, shop_client_secret, days)
+    if "meta" in selected and environment("META_ADS_ORGANIZATION_ID") == org:
         try:
             counts = meta_ads.run_sync(org,int(environment("META_ADS_LOOKBACK_DAYS","90")))
             print(f"meta_ads: succeeded. {counts}",flush=True)
@@ -475,7 +484,7 @@ def main():
             text = str(exc) if isinstance(exc,MetaAdsError) else "Check META_ADS_LOOKBACK_DAYS (1-365)."
             print(f"meta_ads: failed. {text}",flush=True)
             failed = True
-    if environment("OPENAI_ADS_ORGANIZATION_ID") == org:
+    if "chatgpt" in selected and environment("OPENAI_ADS_ORGANIZATION_ID") == org:
         from backend.chatgpt_ads import run_sync as sync_chatgpt, SyncBusy as ChatGPTSyncBusy
         from backend.connectors.chatgpt_ads import AdsError
         try:
@@ -489,7 +498,7 @@ def main():
         except AdsError as exc:
             print(f"chatgpt_ads: {exc}", flush=True)
             failed = True
-    if environment("REDDIT_ADS_ORGANIZATION_ID") == org:
+    if "reddit" in selected and environment("REDDIT_ADS_ORGANIZATION_ID") == org:
         from backend import reddit_ads
         from backend.connectors.reddit_ads import RedditError
         try:

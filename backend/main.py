@@ -4,7 +4,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
-from psycopg2.errors import UndefinedTable, UniqueViolation
+from psycopg2.errors import UndefinedTable, UndefinedColumn, UniqueViolation
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -516,3 +516,22 @@ def synchronize(org: str, _admin=Depends(integration), account=Depends(selected_
         raise HTTPException(409, "A sync is already running for this account.") from None
     except GoogleAdsError as exc:
         raise HTTPException(502, str(exc)) from None
+
+
+@app.post("/orgs/{org}/content/sync")
+def sync_content_selected(org: str, source: str, membership=Depends(member)):
+    from backend.content_jobs import environment, main as run_content
+    if MODE != "live" or membership["role"] != "admin":
+        raise HTTPException(403, "An organization admin must synchronize content.")
+    if source not in {"facebook", "shopify"}:
+        raise HTTPException(422, "Choose Meta Organic Ads or Shopify.")
+    if environment("CONTENT_ORGANIZATION_ID") != org:
+        raise HTTPException(403, "Content sync is not configured for this organization.")
+    try:
+        failed = run_content([], platforms={source})
+    except SystemExit:
+        raise HTTPException(503, "Check content sync configuration on the API service.") from None
+    except (UndefinedTable, UndefinedColumn):
+        raise HTTPException(503, "Apply the content reporting migrations before syncing.") from None
+    return {"status": "skipped" if failed == 2 else "partial" if failed else "completed",
+            "message": "A content sync is already running." if failed == 2 else None}
