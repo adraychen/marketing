@@ -165,3 +165,5 @@ try:
 except APIError as exc:
     for message in str(exc).splitlines():
         st.error(message)
+    if st.session_state.get("token") and st.button("Retry", key="retry-api-error"):
+        st.rerun()
