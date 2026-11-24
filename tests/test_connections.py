@@ -39,6 +39,17 @@ def test_content_endpoint_rejects_nonadmin_and_wrong_org():
         assert exc.value.status_code == 403
 
 
+def test_content_endpoint_missing_configuration_does_not_run_collector():
+    from backend.main import sync_content_selected
+    with patch('backend.main.MODE', 'live'), patch('backend.content_jobs.environment', return_value=''), \
+         patch('backend.content_jobs.main') as collect:
+        with pytest.raises(HTTPException) as exc:
+            sync_content_selected('org', 'shopify', {'role': 'admin'})
+    assert exc.value.status_code == 503
+    assert 'CONTENT_ORGANIZATION_ID on the API service' in exc.value.detail
+    collect.assert_not_called()
+
+
 def test_selected_content_job_does_not_sync_other_platforms():
     from backend import content_jobs as jobs
     env = {'CONTENT_ORGANIZATION_ID': '00000000-0000-0000-0000-000000000001'}

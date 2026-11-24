@@ -525,8 +525,14 @@ def sync_content_selected(org: str, source: str, membership=Depends(member)):
         raise HTTPException(403, "An organization admin must synchronize content.")
     if source not in {"facebook", "shopify"}:
         raise HTTPException(422, "Choose Meta Organic Ads or Shopify.")
-    if environment("CONTENT_ORGANIZATION_ID") != org:
-        raise HTTPException(403, "Content sync is not configured for this organization.")
+    configured_org = environment("CONTENT_ORGANIZATION_ID")
+    if not configured_org:
+        raise HTTPException(503, "Set CONTENT_ORGANIZATION_ID on the API service to this organization's ID, "
+                            "and copy the content sync credentials and feature flags from the scheduled worker. "
+                            "Restart the API service, then retry.")
+    if configured_org != org:
+        raise HTTPException(403, "CONTENT_ORGANIZATION_ID on the API service does not match this organization. "
+                            "Check the selected organization and the API service configuration, then restart the service.")
     try:
         failed = run_content([], platforms={source})
     except SystemExit:

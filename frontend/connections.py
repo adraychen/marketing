@@ -128,7 +128,10 @@ def show(mode, org, base):
     results = st.session_state.get(f'sync-results:{base}')
     if results:
         st.subheader('Last manual sync request')
-        table(results)
+        table(results, download_name='manual-sync-results.csv')
+        for result in results:
+            if result.get('Details'):
+                st.write(f"{result['Platform']}: {result['Details']}")
     st.subheader('Latest sync — all platforms')
     st.caption('Latest stored results, including scheduled runs. Record counts describe imports, not marketing outcomes. Times are shown as recorded, with timezone offsets.')
     table(rows, download_name='all-platform-sync-status.csv')
