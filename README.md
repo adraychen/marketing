@@ -1,5 +1,9 @@
 # Okoo Marketing Dashboard · Stage 1
 
+Paid overview now separates Facebook Ads and Instagram Ads using the existing Meta publisher-platform import. Other returned placements remain visible. Headline totals retain the combined Meta snapshot so breakdown rows cannot double count spend. Missing breakdowns remain unavailable. In Meta Ads, the Delivery platform selector filters cards, previous-period comparisons, campaign performance and daily ad charts; the platform summary has a CSV download and is included in report exports. Cross-source campaign evaluation remains available under All Meta placements because Shopify/GA4 campaign outcomes are not assigned to Meta placements.
+
+Deploy the frontend changes. If platform data is unavailable, ensure the existing `supabase/migrations/20261117000100_meta_platform_delivery.sql` migration has been applied, then sync Meta Paid Ads for the desired dates. No new credentials or new migration are introduced by this display change.
+
 A local Streamlit workspace for Google Ads reporting and unpublished responsive search ad revisions. FastAPI handles authentication, imports, authorization, and draft storage. The six views share the same models in demo and live mode.
 
 ## Run the demo

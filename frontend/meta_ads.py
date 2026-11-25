@@ -67,6 +67,38 @@ def campaigns(data):
              **totals({**data,"daily":grouped[row["id"]]})} for row in data["campaigns"]]
 
 
+def platform_scope(data, platform):
+    if platform is None:
+        return data
+    state = data.get('platform_status', {})
+    return {**data, 'daily': [r for r in data.get('platform_daily', []) if r['publisher_platform'] == platform],
+            'coverage': bool(data.get('platform_coverage')),
+            'stale': data.get('stale', False) or state.get('state') != 'available'}
+
+
+def platform_summary(data):
+    labels = {'facebook': 'Facebook Ads', 'instagram': 'Instagram Ads'}
+    platforms = list(labels) + sorted({r['publisher_platform'] for r in data.get('platform_daily', [])} - labels.keys())
+    account = data.get('account') or {}
+    result = []
+    for platform in platforms:
+        scoped_data = platform_scope(data, platform)
+        values = totals(scoped_data)
+        result.append({'Platform': labels.get(platform, 'Meta · ' + platform.replace('_', ' ').title()),
+                       'Account': account.get('data', {}).get('name'),
+                       'Currency': account.get('data', {}).get('currency'),
+                       'Status': ('Breakdown unavailable — sync Meta Paid Ads' if not data.get('platform_status', {}).get('last_successful_sync')
+                                  else 'Stale import' if scoped_data['stale'] else 'Imported' if scoped_data['coverage'] else 'Partial coverage'),
+                       'Spend': values['spend'], 'Impressions': values['impressions'], 'Clicks': values['clicks'],
+                       'Link clicks': values['inline_link_clicks'],
+                       'Link CTR': ratio(values['inline_link_clicks'], values['impressions']),
+                       'Cost per link click': ratio(values['spend'], values['inline_link_clicks']),
+                       'Meta website purchases': values['website_purchases'],
+                       'CTR': values['ctr'], 'Avg. CPC': values['cpc'],
+                       'Purchase value': values['website_purchase_value'], 'ROAS': values['website_roas']})
+    return result
+
+
 def add_meta_report(report,base,start,end,campaign_ids,data=None,include_ai=False):
     data = scoped(data or load_report(base,start,end),campaign_ids)
     account = data["account"]
@@ -93,6 +125,7 @@ def add_meta_report(report,base,start,end,campaign_ids,data=None,include_ai=Fals
     report.table("Meta paid daily ad performance",data["daily"])
     report.note(PLATFORM_NOTE)
     report.table("Meta publisher-platform channel coverage", platform_coverage(data))
+    report.table("Meta Facebook and Instagram summary", platform_summary(data))
     report.table("Meta publisher-platform daily ad performance", data.get("platform_daily", []))
     report.table("Meta publisher-platform reconciliation", data.get("platform_reconciliation", []))
     from frontend.campaign_evaluation import add_report, load
@@ -162,6 +195,17 @@ def show_meta_ads(base,mode):
     data=scoped(data,selected)
     prior_start,prior_end=previous_period(start,end)
     previous=scoped(load_report(base,prior_start,prior_end),selected)
+    st.subheader('Facebook and Instagram performance')
+    table(platform_summary(data), download_name='meta-platform-performance.csv')
+    platforms = [None, 'facebook', 'instagram'] + sorted({r['publisher_platform'] for r in data.get('platform_daily', [])} - {'facebook', 'instagram'})
+    platform = st.selectbox('Delivery platform', platforms,
+                            format_func=lambda value: 'All Meta placements' if value is None else value.replace('_', ' ').title(),
+                            key=f'meta-delivery-platform:{base}')
+    data, previous = platform_scope(data, platform), platform_scope(previous, platform)
+    if platform is not None:
+        st.caption('Cards, campaign performance and daily charts follow the selected delivery platform. Campaign settings are shared across placements.')
+        if not data.get('platform_status', {}).get('last_successful_sync'):
+            st.info('Platform breakdown unavailable. Apply the existing Meta platform delivery migration and sync Meta Paid Ads.')
     current_totals,prior_totals=totals(data),totals(previous)
     currency=account["data"]["currency"]
     st.caption(f"{currency} / {account['data']['timezone_name']} / Previous period {prior_start} to {prior_end}")
@@ -190,14 +234,18 @@ def show_meta_ads(base,mode):
     with performance:
         table(campaigns(data))
         st.markdown("**Facebook and Instagram delivery**")
+        st.caption('The coverage and raw delivery tables below include all placements for the selected campaigns.')
         st.caption(PLATFORM_NOTE)
         table(platform_coverage(data))
         table(data.get("platform_daily", []))
         if data.get("platform_reconciliation"):
             st.warning("Platform breakdown and unbroken delivery have gaps or disagreements. See reconciliation; totals have not been replaced.")
             table(data["platform_reconciliation"])
-        from frontend.campaign_evaluation import show
-        show(base, start, end, selected)
+        if platform is None:
+            from frontend.campaign_evaluation import show
+            show(base, start, end, selected)
+        else:
+            st.caption('Cross-source campaign evaluation is available under All Meta placements; Shopify and GA4 outcomes are not split by Meta delivery platform.')
     with settings:
         st.caption("Budget and bid fields below are raw Meta minor currency units. Settings reflect latest discovery.")
         table(data["campaigns"])

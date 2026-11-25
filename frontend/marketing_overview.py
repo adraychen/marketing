@@ -6,7 +6,7 @@ import streamlit as st
 from backend.metrics import previous_period, ratio, summarize
 from frontend.client import APIError, call
 from frontend.commerce import show_commerce
-from frontend.meta_ads import load_report as load_meta_report, totals as meta_totals
+from frontend.meta_ads import load_report as load_meta_report, totals as meta_totals, platform_summary
 from frontend.views import coverage, number, period_rows, table
 
 
@@ -32,7 +32,7 @@ def google_rows(base, start, end):
                "Google Ads conversion value": totals.get("value"), "Google Ads ROAS": totals.get("roas")}
 
 
-def show_paid_summary(rows):
+def show_paid_summary(rows, meta_platform_rows=None):
     """Compact delivery and platform-attributed conversion summary."""
     cards = []
     for currency in sorted({r["Currency"] for r in rows if r.get("Spend") is not None}):
@@ -47,6 +47,8 @@ def show_paid_summary(rows):
     for index, (label, value) in enumerate(cards):
         columns[index % len(columns)].metric(label, value)
 
+    if meta_platform_rows is not None:
+        rows = [item for row in rows for item in (meta_platform_rows if row['Platform'] == 'Meta Ads' else [row])]
     counts = {platform: sum(r["Platform"] == platform for r in rows) for platform in {r["Platform"] for r in rows}}
     statuses = {"Imported": "Available", "Partial coverage": "Partial period", "Stale import": "Needs refresh",
                 "Definition conflict": "Attribution/currency conflict",
@@ -62,6 +64,8 @@ def show_paid_summary(rows):
         conversion_key = {"Google Ads": "Google Ads conversions", "Meta Ads": "Meta website purchases",
                           "ChatGPT Ads": "ChatGPT goal conversions", "Reddit Ads": "Reddit purchases"}.get(row["Platform"])
         conversions = row.get(conversion_key)
+        if 'Meta website purchases' in row:
+            conversions = row['Meta website purchases']
         summary.append({"Platform": label,
                         "Spend": number(row.get("Spend"), "money", currency),
                         "Impressions": f"{row['Impressions']:,.0f}" if row.get("Impressions") is not None else "—",
@@ -71,6 +75,8 @@ def show_paid_summary(rows):
                         "Conversions": f"{conversions:,.2f}".rstrip("0").rstrip(".") if conversions is not None else "—",
                         "Data status": statuses.get(row.get("Status"), "Unavailable")})
     table(summary)
+    if meta_platform_rows is not None:
+        st.caption('Facebook and Instagram rows use Meta’s publisher-platform breakdown. Headline totals use the combined Meta import; missing or differing breakdown data does not change those totals.')
     st.caption("Reported totals include available data only. — means unavailable or an undefined ratio; 0 means reported zero. "
                "CTR and average CPC are calculated from reported clicks, impressions and spend. Meta clicks include all ad clicks.")
     st.caption("Open Paid Advertising for campaign results, daily charts, conversions, revenue and ROAS. "
@@ -103,10 +109,12 @@ def show_marketing_overview(base, mode, *, paid_only=False):
 
     st.subheader("Paid advertising")
     rows = list(google_rows(base, start, end))
+    meta_platform_rows = None
     if not rows:
         rows.append({"Platform": "Google Ads", "Status": "No account connected"})
     try:
         meta = load_meta_report(base,start,end)
+        meta_platform_rows = platform_summary(meta)
         if meta["account"]:
             account = meta["account"]
             metrics = meta_totals(meta)
@@ -149,7 +157,7 @@ def show_marketing_overview(base, mode, *, paid_only=False):
         rows.extend(reddit or [{"Platform": "Reddit Ads", "Status": "Not connected"}])
     except APIError:
         rows.append({"Platform": "Reddit Ads", "Status": "Not connected or migration needed"})
-    show_paid_summary(rows)
+    show_paid_summary(rows, meta_platform_rows)
     if paid_only:
         return
 
