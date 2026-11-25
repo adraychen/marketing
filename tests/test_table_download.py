@@ -21,3 +21,14 @@ def test_no_download_for_empty_table():
     with patch('frontend.views.st') as ui:
         table([], download_name='empty.csv')
     ui.download_button.assert_not_called()
+
+
+def test_tables_without_named_export_have_distinct_csv_downloads():
+    with patch('frontend.views.st') as ui:
+        table([{'Platform': 'Facebook', 'Spend': 12}])
+        table([{'Platform': 'Instagram', 'Spend': 8}])
+    first, second = [call.kwargs for call in ui.download_button.call_args_list]
+    assert first['file_name'].endswith('.csv')
+    assert first['key'] != second['key']
+    assert first['on_click'] == second['on_click'] == 'ignore'
+    assert 'Facebook' in first['data'].decode('utf-8-sig')

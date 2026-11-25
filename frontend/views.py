@@ -1,4 +1,5 @@
 import difflib
+import hashlib
 from collections import defaultdict
 from datetime import date, timedelta
 from urllib.parse import urlsplit
@@ -159,12 +160,15 @@ def table(rows, download_name=None):
         return
     frame = pd.DataFrame(rows)
     st.dataframe(frame, hide_index=True, width="stretch")
-    if download_name:
-        st.download_button(
-            "Download table as CSV", data=frame.to_csv(index=False).encode("utf-8-sig"),
-            file_name=download_name, mime="text/csv", on_click="ignore",
-            key=f"table-download:{download_name}",
-        )
+    csv = frame.to_csv(index=False).encode("utf-8-sig")
+    if not download_name:
+        digest = hashlib.sha256(csv).hexdigest()[:12]
+        download_name = f"dashboard-table-{digest}.csv"
+    st.download_button(
+        "Download table as CSV", data=csv,
+        file_name=download_name, mime="text/csv", on_click="ignore",
+        key=f"table-download:{download_name}",
+    )
 
 
 def metric_by_resource(report, kind, start, end, currency):
